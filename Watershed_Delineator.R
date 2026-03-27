@@ -1040,8 +1040,6 @@ Watershed_Delineator <- function(raster,
                                                outlet_cell)
   {
     # ------------------------------------------------------------------------------------------------
-    final_all_check <- list()
-    final_outlet <- list()
     edge1 <- 1:ncol(raster) # top edge
     edge2 <- seq(from = 1, to = ncell(raster), by = ncol(raster)) # left edge
     edge3 <- seq(from = ncol(raster), to = ncell(raster), by = ncol(raster)) # right edge
@@ -1086,13 +1084,12 @@ Watershed_Delineator <- function(raster,
     
     # ------------------------------------------------------------------------------------------------
     # which cells have been checked, and which flow to the outlet cell
-    all_check <- matrix(FALSE,
-                        ncol = ncol(raster),
-                        nrow = nrow(raster))
-    cells_flowing_to_outlet <- matrix(FALSE,
-                                      ncol = ncol(raster),
-                                      nrow = nrow(raster))
-    ncell <- nrow(all_check)*ncol(all_check)
+    final_all_check <- matrix(0,
+                              ncol = ncol(raster),
+                              nrow = nrow(raster))
+    final_cells_flowing_to_outlet <- matrix(0,
+                                            ncol = ncol(raster),
+                                            nrow = nrow(raster))
     # ------------------------------------------------------------------------------------------------
     
     
@@ -1103,8 +1100,17 @@ Watershed_Delineator <- function(raster,
       # if its an edge piece it cant have any flow directed towards it
       # otherwise continue
       if(outlet_cell[i] %in% edges){
-        final_outlet[[i]] <- 0
-        final_all_check[[i]] <- 0
+        outlet_column <- outlet_cell[i] %% ncol(raster)
+        if(outlet_column == 0){
+          outlet_column <- ncol(raster)
+          outlet_row <- floor(outlet_cell[i]/ncol(raster))
+        } else {
+          outlet_row <- floor(outlet_cell[i]/ncol(raster))
+          outlet_row <- outlet_row + 1
+        }
+        
+        final_all_check[outlet_row, outlet_column] <- 0
+        final_cells_flowing_to_outlet[outlet_row, outlet_column] <- 0
         if(suppress_loading_bar == FALSE){
           loading_bar(i,
                       length(outlet_cell),
@@ -1151,8 +1157,9 @@ Watershed_Delineator <- function(raster,
         # ------------------------------------------------------------------------------------------------
         # if theyre all NA then disregard
         if(all(is.na(outlet_neighbors)) == TRUE){
-          final_outlet[[i]] <- 0
-          final_all_check[[i]] <- 0
+          final_all_check[outlet_row, outlet_column] <- 0
+          final_cells_flowing_to_outlet[outlet_row, outlet_column] <- 0
+          
           if(suppress_loading_bar == FALSE){
             loading_bar(i,
                         length(outlet_cell),
@@ -1200,19 +1207,19 @@ Watershed_Delineator <- function(raster,
             key_next <- paste0(next_row_column[ ,1], next_row_column[ ,2])
             rm <- which((key_next %in% key) == TRUE)
             if(length(rm) > 0){
-              next_row_column <- next_row_column[-c(rm), ]
+              next_row_column <- matrix(next_row_column[-c(rm), ], ncol = 2)
             } else {}
             # ------------------------------------------------------------------------------------------------
             
             # ------------------------------------------------------------------------------------------------
             # update loading bar
             if(suppress_loading_bar == FALSE){
-              # loading_bar(i,
-              #             length(outlet_cell),
-              #             width = 50,
-              #             optional_text = paste0('Outlet Cell: ',i,
-              #                                    ' | Niter: ', niter,
-              #                                    ' | Unique Cell Checked: ', ncheck))
+              loading_bar(i,
+                          length(outlet_cell),
+                          width = 50,
+                          optional_text = paste0('Outlet Cell: ',i,
+                                                 ' | Niter: ', niter,
+                                                 ' | Unique Cell Checked: ', ncheck))
             }
             # ------------------------------------------------------------------------------------------------
             
@@ -1247,7 +1254,7 @@ Watershed_Delineator <- function(raster,
                 }
                 # ------------------------------------------------------------------------------------------------
               } else{}
-              next_row_column <- next_row_column[to_check_currently, ]
+              next_row_column <- matrix(next_row_column[to_check_currently, ], ncol = 2)
               # ------------------------------------------------------------------------------------------------
             } else {
               
@@ -1295,7 +1302,7 @@ Watershed_Delineator <- function(raster,
                   
                   # ------------------------------------------------------------------------------------------------
                   if(nrow(step2) == 0){
-                    next_row_column <- go_back_and_check[to_check_currently, ]
+                    next_row_column <- matrix(go_back_and_check[to_check_currently, ], ncol = 2)
                     go_back_and_check <- matrix(go_back_and_check[set_aside, ],
                                                 ncol = 2)
                     row_column_new <- TRUE
@@ -1319,12 +1326,22 @@ Watershed_Delineator <- function(raster,
                                                        outlet_column + outlet_neighbors_dx)]
             all_row_columns <- rbind(all_row_columns,
                                      next_row_column)
-            print(next_row_column)
             # ------------------------------------------------------------------------------------------------
           }
           # ------------------------------------------------------------------------------------------------
-          final_all_check[[i]] <- length(which(all_check == TRUE))
-          final_outlet[[i]] <- length(which(cells_flowing_to_outlet == TRUE))
+          
+          outlet_column <- outlet_cell[i] %% ncol(raster)
+          if(outlet_column == 0){
+            outlet_column <- ncol(raster)
+            outlet_row <- floor(outlet_cell[i]/ncol(raster))
+          } else {
+            outlet_row <- floor(outlet_cell[i]/ncol(raster))
+            outlet_row <- outlet_row + 1
+          }
+          
+          final_all_check[outlet_row, outlet_column] <- length(which(all_check == TRUE))
+          final_cells_flowing_to_outlet[outlet_row, outlet_column] <- length(which(cells_flowing_to_outlet == TRUE))
+          
         }
         # ------------------------------------------------------------------------------------------------
       }
@@ -1333,28 +1350,12 @@ Watershed_Delineator <- function(raster,
     cat('\n')
     # ------------------------------------------------------------------------------------------------
     
-    # ------------------------------------------------------------------------------------------------
-    # cbinding to see where any cell is true
-    names(final_all_check) <- NULL
-    names(final_outlet) <- NULL
-    final_all_check <- as.vector(unlist(final_all_check))
-    final_outlet <- as.vector(unlist(final_outlet))
-    # ------------------------------------------------------------------------------------------------
-
-    # ------------------------------------------------------------------------------------------------
-    # making matrices
-    all_check <- matrix(rev(final_all_check),
-                        ncol = ncol(raster),
-                        nrow = nrow(raster))
-    cells_flowing_to_outlet <- matrix(rev(final_outlet),
-                                      ncol = ncol(raster),
-                                      nrow = nrow(raster))
-    # ------------------------------------------------------------------------------------------------
+    
     
     # ------------------------------------------------------------------------------------------------
     # return to higher level
-    return(list(all_check,
-                cells_flowing_to_outlet))
+    return(list(final_all_check,
+                final_cells_flowing_to_outlet))
     # ------------------------------------------------------------------------------------------------
   }
   # ------------------------------------------------------------------------------------------------
@@ -1505,7 +1506,7 @@ Watershed_Delineator <- function(raster,
         key_next <- paste0(next_row_column[ ,1], next_row_column[ ,2])
         rm <- which((key_next %in% key) == TRUE)
         if(length(rm) > 0){
-          next_row_column <- next_row_column[-c(rm), ]
+          next_row_column <- matrix(next_row_column[-c(rm), ], ncol = 2)
         } else {}
         # ------------------------------------------------------------------------------------------------
         
@@ -1567,7 +1568,7 @@ Watershed_Delineator <- function(raster,
             }
             # ------------------------------------------------------------------------------------------------
           } else{}
-          next_row_column <- next_row_column[to_check_currently, ]
+          next_row_column <- matrix(next_row_column[to_check_currently, ], ncol = 2)
           # ------------------------------------------------------------------------------------------------
         } else {
           
@@ -1615,7 +1616,7 @@ Watershed_Delineator <- function(raster,
               
               # ------------------------------------------------------------------------------------------------
               if(nrow(step2) == 0){
-                next_row_column <- go_back_and_check[to_check_currently, ]
+                next_row_column <- matrix(go_back_and_check[to_check_currently, ], ncol = 2)
                 go_back_and_check <- matrix(go_back_and_check[set_aside, ],
                                             ncol = 2)
                 row_column_new <- TRUE
@@ -2036,7 +2037,7 @@ Watershed_Delineator <- function(raster,
   
   values(flow_rast) <- output[[2]]
   values(check_rast) <- output[[1]]
-  
+
   stack <- c(flow_rast,
              check_rast)
   names(stack) <- c('Flow Accumulation','Checked Cells')
