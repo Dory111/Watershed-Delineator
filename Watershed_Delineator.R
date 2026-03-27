@@ -50,6 +50,8 @@
 #                          outlet_location2)
 # st_geometry(outlet_location) <- 'geometry'
 # # -----------------------------------------------------------------------------------------------
+raster <- rast(system.file('ex/elev.tif',package="terra"))
+outlet_location = matrix(c(6.2, 49.6), ncol = 2, byrow = TRUE)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -1194,17 +1196,23 @@ Watershed_Delineator <- function(raster,
             # find which rows and columns to check next
             next_row_column <- matrix(row_columns[which(output[[1]] == TRUE), ],
                                       ncol = 2)
+            key <- paste0(all_row_columns[, 1], all_row_columns[ ,2])
+            key_next <- paste0(next_row_column[ ,1], next_row_column[ ,2])
+            rm <- which((key_next %in% key) == TRUE)
+            if(length(rm) > 0){
+              next_row_column <- next_row_column[-c(rm), ]
+            } else {}
             # ------------------------------------------------------------------------------------------------
             
             # ------------------------------------------------------------------------------------------------
             # update loading bar
             if(suppress_loading_bar == FALSE){
-              loading_bar(i,
-                          length(outlet_cell),
-                          width = 50,
-                          optional_text = paste0('Outlet Cell: ',i,
-                                                 ' | Niter: ', niter,
-                                                 ' | Unique Cell Checked: ', ncheck))
+              # loading_bar(i,
+              #             length(outlet_cell),
+              #             width = 50,
+              #             optional_text = paste0('Outlet Cell: ',i,
+              #                                    ' | Niter: ', niter,
+              #                                    ' | Unique Cell Checked: ', ncheck))
             }
             # ------------------------------------------------------------------------------------------------
             
@@ -1311,6 +1319,7 @@ Watershed_Delineator <- function(raster,
                                                        outlet_column + outlet_neighbors_dx)]
             all_row_columns <- rbind(all_row_columns,
                                      next_row_column)
+            print(next_row_column)
             # ------------------------------------------------------------------------------------------------
           }
           # ------------------------------------------------------------------------------------------------
@@ -1492,6 +1501,12 @@ Watershed_Delineator <- function(raster,
         # find which rows and columns to check next
         next_row_column <- matrix(row_columns[which(output[[1]] == TRUE), ],
                                   ncol = 2)
+        key <- paste0(all_row_columns[, 1], all_row_columns[ ,2])
+        key_next <- paste0(next_row_column[ ,1], next_row_column[ ,2])
+        rm <- which((key_next %in% key) == TRUE)
+        if(length(rm) > 0){
+          next_row_column <- next_row_column[-c(rm), ]
+        } else {}
         # ------------------------------------------------------------------------------------------------
         
         # ------------------------------------------------------------------------------------------------
