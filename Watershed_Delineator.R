@@ -127,6 +127,7 @@ Watershed_Delineator <- function(raster,
                                  flow_accumulation_rast_name = NULL,
                                  min_slope = 0,
                                  flat_code = -9999,
+                                 resolve_flats = TRUE,
                                  sink_code = -4444,
                                  diff_x = NULL,
                                  diff_y = NULL,
@@ -1067,6 +1068,289 @@ Watershed_Delineator <- function(raster,
   
   
   
+  # ==================================================================================================
+  # finds continuous flat areas and gives them an outlet flow direction
+  # ==================================================================================================
+  resolve_flats_function <- function(input_flow_degree,
+                                     input_flow_rad,
+                                     raster,
+                                     flat_code,
+                                     sink_code)
+  {
+    # ------------------------------------------------------------------------------------------------
+    # get matrices of which cells are the flat code, what the dem values are, and which cells have been checked
+    flow_degree_values <- matrix(values(input_flow_degree),
+                                 ncol = ncol(raster),
+                                 nrow = nrow(raster), byrow = TRUE)
+    flow_rad_values <- matrix(values(input_flow_rad),
+                              ncol = ncol(raster),
+                              nrow = nrow(raster), byrow = TRUE)
+    raster_values <- matrix(values(raster),
+                            ncol = ncol(raster),
+                            nrow = nrow(raster), byrow = TRUE)
+    check_cells <- matrix(FALSE,
+                          ncol = ncol(raster),
+                          nrow = nrow(raster), byrow = TRUE)
+    # ------------------------------------------------------------------------------------------------
+    
+    # ------------------------------------------------------------------------------------------------
+    # neighbor direction
+    outlet_neighbors_dx <- c( 0,  1, 1, 1, 0, -1, -1, -1)
+    outlet_neighbors_dy <- c(-1, -1, 0, 1, 1,  1,  0, -1)
+    diff_dx <- c(0, 1, 1,  1,  0, -1, -1, -1)
+    diff_dy <- c(1, 1, 0, -1, -1, -1,  0,  1)
+    
+    diff_dx_shifted <- c(1, 1,  1, 0, -1, -1, -1, 0) 
+    diff_dy_shifted <- c(1, 0, -1, -1, -1, 0,  1, 1)
+    # ------------------------------------------------------------------------------------------------
+    
+    # ------------------------------------------------------------------------------------------------
+    all_flats <- list()
+    outer_counter <- 0
+    loading_counter <- 0
+    for(i in 1:nrow(raster)){
+      # ------------------------------------------------------------------------------------------------
+      for(j in 1:ncol(raster)){
+        # ------------------------------------------------------------------------------------------------
+        # getting whether the current cell is NA or flat
+        row <- i
+        column <- j
+        current_cell_value <- flow_degree_values[row,column]
+        current_cell_check <- check_cells[row,column]
+        # ------------------------------------------------------------------------------------------------
+        
+        
+        # ------------------------------------------------------------------------------------------------
+        if(suppress_loading_bar == FALSE){
+          loading_counter <- loading_counter + 1
+          loading_bar(loading_counter,
+                      ncell(raster),
+                      width = 50,
+                      optional_text = paste0('Cell: ',loading_counter))
+        }
+        # ------------------------------------------------------------------------------------------------
+        
+        
+        # ------------------------------------------------------------------------------------------------
+        # if NA its edge piece (forbidden)
+        if(is.na(current_cell_value) != TRUE){
+          # ------------------------------------------------------------------------------------------------
+          # check if flat code (wanted)
+          if(current_cell_value == flat_code & current_cell_check == FALSE){
+            # ------------------------------------------------------------------------------------------------
+            # find neighbors of current cell, visualize for diagnostic purposes
+            outer_counter <- outer_counter + 1
+            bound <- cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)
+            current_neighbors <- flow_degree_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+            current_check <- check_cells[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+            current_cell_value <- flow_degree_values[row,column]
+            visual_neighbors <- c(current_neighbors[8], current_neighbors[1:2],
+                                  current_neighbors[7], current_cell_value, current_neighbors[3],
+                                  current_neighbors[6:4])
+            visual_neighbors <- matrix(visual_neighbors,
+                                       ncol = 3, nrow = 3, byrow = TRUE)
+            # ------------------------------------------------------------------------------------------------
+            
+            # ------------------------------------------------------------------------------------------------
+            done <- FALSE
+            current_flats <- list()
+            counter <- 0
+            remove_first_row <- TRUE
+            go_back_and_check <- matrix(c(1,1), nrow = 1)
+            while(done == FALSE){
+              # ------------------------------------------------------------------------------------------------
+              # are any of the current cell neighbors flat?
+              flat_neighbors <- which(current_neighbors == flat_code)
+              rm <- which(current_check == TRUE)
+              if(length(rm) > 0){
+                flat_neighbors <- flat_neighbors[-c(which(flat_neighbors %in% rm))]
+              }
+              # ------------------------------------------------------------------------------------------------
+              
+              # ------------------------------------------------------------------------------------------------
+              # are there any flat neighbors to check next
+              if(length(flat_neighbors) != 0){
+                counter <- counter + 1
+                # ------------------------------------------------------------------------------------------------
+                # append which neighbors are flat
+                # designate next cell to search from based on which cells are flat
+                # whatever is not designated as next cell and is flat, set aside to search from later
+                current_flats[[counter]] <- rbind(bound[flat_neighbors,],
+                                                  c(row, column))
+                check_cells[rbind(bound,
+                                  c(row, column))] <- TRUE
+                next_chosen_cell <- round(runif(n = 1,
+                                                min = 1,
+                                                max = nrow(matrix(bound[flat_neighbors,], ncol = 2))))
+                
+                go_back_and_check <- rbind(go_back_and_check,
+                                           bound[flat_neighbors[-c(next_chosen_cell)],])
+                next_chosen_cell <- bound[flat_neighbors[next_chosen_cell],]
+                row <- next_chosen_cell[1]
+                column <- next_chosen_cell[2]
+                
+                # ------------------------------------------------------------------------------------------------
+                
+                # ------------------------------------------------------------------------------------------------
+                # remove first dummy row?
+                if(remove_first_row == TRUE){
+                  go_back_and_check <- matrix(go_back_and_check[-c(1), ], ncol = 2)
+                  remove_first_row <- FALSE
+                }
+                # ------------------------------------------------------------------------------------------------
+              }
+              # ------------------------------------------------------------------------------------------------
+              
+              # ------------------------------------------------------------------------------------------------
+              # if nothing left to check loop must be complete
+              # if there are no nearby flats but there are some set aside then check them
+              if(length(flat_neighbors) == 0 & nrow(go_back_and_check) == 0){
+                current_flats[[counter]] <- matrix(c(row,column), nrow = 1)
+                done <- TRUE
+                
+              } else if(length(flat_neighbors) == 0 & nrow(go_back_and_check) != 0){
+                # ------------------------------------------------------------------------------------------------
+                # finding next search starting point from what was set aside
+                done2 <- FALSE
+                while(done2 == FALSE){
+                  next_chosen_cell <- round(runif(n = 1,
+                                                  min = 1,
+                                                  max = nrow(go_back_and_check)))
+                  row <- go_back_and_check[next_chosen_cell, 1]
+                  column <- go_back_and_check[next_chosen_cell, 2]
+                  go_back_and_check <- matrix(go_back_and_check[-c(next_chosen_cell), ], ncol = 2)
+                  counter <- counter + 1
+                  check_cells[row,column] <- TRUE
+                  current_flats[[counter]] <- matrix(c(row,column), nrow = 1)
+                  
+                  if(nrow(go_back_and_check) == 0){
+                    done2 <- TRUE
+                    
+                  } else if(any(check_cells[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]  == FALSE)){
+                    done2 <- TRUE
+                  } else{}
+                }
+                # ------------------------------------------------------------------------------------------------
+                
+                # ------------------------------------------------------------------------------------------------
+                # remove first dummy row?
+                if(remove_first_row == TRUE){
+                  go_back_and_check <- matrix(go_back_and_check[-c(1), ], ncol = 2)
+                  remove_first_row <- FALSE
+                }
+                # ------------------------------------------------------------------------------------------------
+              }
+              # ------------------------------------------------------------------------------------------------
+              
+              
+              # ------------------------------------------------------------------------------------------------
+              # find neighbors of current cell, visualize for diagnostic purposes
+              bound <- cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)
+              current_neighbors <- flow_degree_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+              current_check <- check_cells[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+              current_cell_value <- flow_degree_values[row,column]
+              visual_neighbors <- c(current_neighbors[8], current_neighbors[1:2],
+                                    current_neighbors[7], current_cell_value, current_neighbors[3],
+                                    current_neighbors[6:4])
+              visual_neighbors <- matrix(visual_neighbors,
+                                         ncol = 3, nrow = 3, byrow = TRUE)
+              # ------------------------------------------------------------------------------------------------
+              
+            }
+            # ------------------------------------------------------------------------------------------------
+            
+            # ------------------------------------------------------------------------------------------------
+            all_flats[[outer_counter]] <- do.call(rbind, current_flats)
+            # ------------------------------------------------------------------------------------------------
+          } else {}
+          # ------------------------------------------------------------------------------------------------
+        } else {}
+        # ------------------------------------------------------------------------------------------------
+      }
+      # ------------------------------------------------------------------------------------------------
+    }
+    # ------------------------------------------------------------------------------------------------
+    
+
+
+    
+    
+    
+    # ------------------------------------------------------------------------------------------------
+    if(length(all_flats) > 0){
+
+      # ------------------------------------------------------------------------------------------------
+      for(i in 1:length(all_flats)){
+        # ------------------------------------------------------------------------------------------------
+        # set up list
+        flat_neighbors_outlet <- list()
+        counter <- 0
+        # ------------------------------------------------------------------------------------------------
+        
+        
+        # ------------------------------------------------------------------------------------------------
+        for(j in 1:nrow(all_flats[[i]])){
+          # ------------------------------------------------------------------------------------------------
+          # get all neighbors and directions of the current flat region
+          counter <- counter + 1
+          flat_neighbors_outlet[[counter]] <- cbind(all_flats[[i]][j,1] + outlet_neighbors_dy,
+                                                    all_flats[[i]][j,2] + outlet_neighbors_dx)
+          current_dem_value <- raster_values[cbind(all_flats[[i]][j,1],
+                                                   all_flats[[i]][j,2])]
+          neighbors_direction <- flow_degree_values[cbind(all_flats[[i]][j,1] + outlet_neighbors_dy,
+                                                          all_flats[[i]][j,2] + outlet_neighbors_dx)]
+          neighbor_dem_delta <- current_dem_value - raster_values[cbind(all_flats[[i]][j,1] + outlet_neighbors_dy,
+                                                                        all_flats[[i]][j,2] + outlet_neighbors_dx)]
+          flat_neighbors_outlet[[counter]] <- cbind(neighbors_direction,
+                                                    neighbor_dem_delta,
+                                                    all_flats[[i]][j,1] + outlet_neighbors_dy,
+                                                    all_flats[[i]][j,2] + outlet_neighbors_dx)
+          # ------------------------------------------------------------------------------------------------
+        }
+        # ------------------------------------------------------------------------------------------------
+        
+        # ------------------------------------------------------------------------------------------------
+        # bind
+        # only find where there is a direction and the cell is at or lower than the current cell
+        # we only want where the flat will flow down, not where the flow is coming from
+        # if the flat region has no cells lower with a valid direction it must be a sink
+        flat_neighbors_outlet <- do.call(rbind, flat_neighbors_outlet)
+        flat_neighbors_outlet <- unique(flat_neighbors_outlet)
+        flat_neighbors_outlet <- flat_neighbors_outlet[is.na(flat_neighbors_outlet[ ,1]) == FALSE &
+                                                         is.na(flat_neighbors_outlet[ ,2]) == FALSE, ]
+        if(nrow(flat_neighbors_outlet) != 0){
+          flat_neighbors_outlet <- flat_neighbors_outlet[flat_neighbors_outlet[ ,1] != flat_code &
+                                                           flat_neighbors_outlet[ ,2] >= 0, ]
+          if(nrow(flat_neighbors_outlet) != 0){
+            y_component <- sin((flat_neighbors_outlet[,1])*(pi/180))
+            x_component <- cos((flat_neighbors_outlet[,1])*(pi/180))
+            rad <- atan(sum(y_component)/sum(x_component))
+            deg <- (rad * 180)/3.14159
+            deg <- round(deg)
+            flow_degree_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- deg
+            flow_rad_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- rad
+            
+          } else {
+            flow_degree_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- sink_code
+            flow_rad_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- sink_code
+          }
+        } else {
+          flow_degree_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- sink_code
+          flow_rad_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- sink_code
+        }
+        # ------------------------------------------------------------------------------------------------
+      }
+      # ------------------------------------------------------------------------------------------------
+    } else {}
+    # ------------------------------------------------------------------------------------------------
+    return(list(flow_degree_values,
+                flow_rad_values))
+  }
+  # ------------------------------------------------------------------------------------------------
+  
+  
+
+  
   
   # ==================================================================================================
   # Accumulates flow going to all cells
@@ -1191,6 +1475,8 @@ Watershed_Delineator <- function(raster,
   # ------------------------------------------------------------------------------------------------  
     
 
+  
+  
   # ==================================================================================================
   # Accumulates flow going to all cells
   # ==================================================================================================
@@ -1927,17 +2213,31 @@ Watershed_Delineator <- function(raster,
   values(flow_dir_deg_rast) <- flow_dir_deg_output
   values(flow_dir_rad_rast) <- flow_dir_rad_output
   values(flow_dir_slope_rast) <- flow_dir_slope_output
+
+  # ------------------------------------------------------------------------------------------------
+  
+  
+  # ------------------------------------------------------------------------------------------------
+  if(resolve_flats == TRUE){
+    output <- resolve_flats_function(input_flow_degree = stack$degrees,
+                                     input_flow_rad = stack$radians,
+                                     raster = raster,
+                                     flat_code = flat_code,
+                                     sink_code = sink_code)
+    values(flow_dir_deg_rast) <- output[[1]]
+    values(flow_dir_rad_rast) <- output[[2]]
+  }
+  # ------------------------------------------------------------------------------------------------
+  
+  # ------------------------------------------------------------------------------------------------
   stack <- c(flow_dir_deg_rast,
              flow_dir_rad_rast,
              flow_dir_slope_rast)
   names(stack) <- c('degrees','radians','slope')
-  
-  
   writeRaster(stack,
               file.path(out_dir,paste0(flow_dir_rast_name,'.tif')),
               overwrite = TRUE)
   # ------------------------------------------------------------------------------------------------
-  
   
   
   
