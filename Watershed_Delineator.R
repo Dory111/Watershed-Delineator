@@ -1,6 +1,6 @@
-# # ------------------------------------------------------------------------------------------------
-# # testing values
-# # uniform flow to center sink, two outlets
+# ------------------------------------------------------------------------------------------------
+# testing values
+# uniform flow to center sink, two outlets
 # rast <- raster(ncol = 10, nrow = 10,
 #                xmn = 1000, xmx = 2000,
 #                ymn = 1000, ymx = 2000,
@@ -49,65 +49,97 @@
 # outlet_location <- rbind(outlet_location,
 #                          outlet_location2)
 # st_geometry(outlet_location) <- 'geometry'
-# # -----------------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------------
+
+
+
 raster <- rast(system.file('ex/elev.tif',package="terra"))
-outlet_location = matrix(c(6.2, 49.6), ncol = 2, byrow = TRUE)
-
-
-# ------------------------------------------------------------------------------------------------
-# testing values
-# sink at DEM corner
-rast <- raster(ncol = 10, nrow = 10,
-               xmn = 1000, xmx = 2000,
-               ymn = 1000, ymx = 2000,
-               crs = 3310)
-
-
-values <- matrix(data = NA, nrow = 10, ncol = 10)
-values[1, ] <- seq(from = 50, to = 0, length.out = 10) 
-values[ ,1] <- seq(from = 50, to = 100, length.out = 10)
-values[ ,10] <- seq(from = 0, to = 50, length.out = 10)
-values[10, ] <- seq(from = 100, to = 50, length.out = 10)
-for(i in 1:9){
-  values[i,2:9] <- seq(from = values[i,1], to = values[i,10], length.out = 10)[2:9] + runif(n = 8, min = -2, max = 2)
-}
-values[values < 0] <- 0
-values[1, ] <- 100
-values[ ,1] <- 100
-values[ ,10] <- 100
-values[10, ] <- 100
-
-values(rast) <- as.vector(values)
-
-
-
-
-raster <- rast
+outlet_location = matrix(c(6.2, 49.87), ncol = 2, byrow = TRUE)
 out_dir <- 'C:/Users/ChristopherDory/LWA Dropbox/Christopher Dory/Projects/598/598.06/00 ISW/Output/Raster'
 flow_dir_rast_name <- 'Flow_Dir_Test'
 flow_to_outlet_rast_name <- 'Outlet_Test'
-min_slope <- 1
+min_slope <- 0
 diff_x <- NULL
 diff_y <- NULL
 zunit <- 'm'
 suppress_loading_bar <- FALSE
 suppress_console_messages <- FALSE
+flow_accumulation_rast_name <- NULL
 spinning_bar_update_cycle <- 1
 sink_code <- -4444
 flat_code <- -9999
-outlet_location_CRS <- NULL
-outlet_location_is_sf <- TRUE
-outlet_location <- st_sf(st_sfc(st_point(x = c(1150,1150)),
-                          crs = 3310))
-# st_geometry(outlet_location) <- 'geometry'
-# outlet_location2 <- st_sf(st_sfc(st_point(x = c(1150,1250)),
-#                                  crs = 3310))
-# st_geometry(outlet_location2) <- 'geometry'
-# outlet_location <- rbind(outlet_location,
-#                          outlet_location2)
-st_geometry(outlet_location) <- 'geometry'
+outlet_location_CRS <- crs(raster)
+outlet_location_is_sf <- FALSE
 outlet_location_is_line <- FALSE
 outlet_location_line_density <- 100
+Watershed_Delineator(raster,
+                     out_dir,
+                     outlet_location_is_sf = FALSE,
+                     outlet_location = outlet_location, flow_dir_rast_name = 'Flow_Dir_Test')
+r1 <- rast(file.path(out_dir,paste0('flow_accumulation_rast','.tif')))
+deg <- r1$degrees
+v <- values(deg)
+v[v == -4444] <- NA
+values(deg) <- v
+plot(deg)
+r <- rast('C:/Users/ChristopherDory/LWA Dropbox/Christopher Dory/Projects/598/598.06/00 ISW/Data/Raster/DEM/testflow_dir.tif')
+plot(r)
+
+
+# ------------------------------------------------------------------------------------------------
+# testing values
+# sink at DEM corner
+# rast <- raster(ncol = 10, nrow = 10,
+#                xmn = 1000, xmx = 2000,
+#                ymn = 1000, ymx = 2000,
+#                crs = 3310)
+# 
+# 
+# values <- matrix(data = NA, nrow = 10, ncol = 10)
+# values[1, ] <- seq(from = 50, to = 0, length.out = 10) 
+# values[ ,1] <- seq(from = 50, to = 100, length.out = 10)
+# values[ ,10] <- seq(from = 0, to = 50, length.out = 10)
+# values[10, ] <- seq(from = 100, to = 50, length.out = 10)
+# for(i in 1:9){
+#   values[i,2:9] <- seq(from = values[i,1], to = values[i,10], length.out = 10)[2:9] + runif(n = 8, min = -2, max = 2)
+# }
+# values[values < 0] <- 0
+# values[1, ] <- 100
+# values[ ,1] <- 100
+# values[ ,10] <- 100
+# values[10, ] <- 100
+# 
+# values(rast) <- as.vector(values)
+# 
+# 
+# 
+# 
+# raster <- rast
+# out_dir <- 'C:/Users/ChristopherDory/LWA Dropbox/Christopher Dory/Projects/598/598.06/00 ISW/Output/Raster'
+# flow_dir_rast_name <- 'Flow_Dir_Test'
+# flow_to_outlet_rast_name <- 'Outlet_Test'
+# min_slope <- 1
+# diff_x <- NULL
+# diff_y <- NULL
+# zunit <- 'm'
+# suppress_loading_bar <- FALSE
+# suppress_console_messages <- FALSE
+# spinning_bar_update_cycle <- 1
+# sink_code <- -4444
+# flat_code <- -9999
+# outlet_location_CRS <- NULL
+# outlet_location_is_sf <- TRUE
+# outlet_location <- st_sf(st_sfc(st_point(x = c(1150,1150)),
+#                           crs = 3310))
+# # st_geometry(outlet_location) <- 'geometry'
+# # outlet_location2 <- st_sf(st_sfc(st_point(x = c(1150,1250)),
+# #                                  crs = 3310))
+# # st_geometry(outlet_location2) <- 'geometry'
+# # outlet_location <- rbind(outlet_location,
+# #                          outlet_location2)
+# st_geometry(outlet_location) <- 'geometry'
+# outlet_location_is_line <- FALSE
+# outlet_location_line_density <- 100
 # ------------------------------------------------------------------------------------------------
 
 
@@ -2090,11 +2122,11 @@ Watershed_Delineator <- function(raster,
   }
   
   if(is.null(flow_to_outlet_rast_name) == TRUE){
-    flow_dir_rast_name <- 'flow_to_outlet_rast'
+    flow_to_outlet_rast_name <- 'flow_to_outlet_rast'
   }
   
   if(is.null(flow_accumulation_rast_name) == TRUE){
-    flow_dir_rast_name <- 'flow_accumulation_rast'
+    flow_accumulation_rast_name <- 'flow_accumulation_rast'
   }
   # ------------------------------------------------------------------------------------------------
   
@@ -2255,13 +2287,11 @@ Watershed_Delineator <- function(raster,
              flow_dir_rad_rast,
              flow_dir_slope_rast)
   names(stack) <- c('degrees','radians','slope')
-  writeRaster(stack,
+  terra::writeRaster(stack,
               file.path(out_dir,paste0(flow_dir_rast_name,'.tif')),
               overwrite = TRUE)
   # ------------------------------------------------------------------------------------------------
-  
-  
-  
+
   
   
   
@@ -2317,7 +2347,7 @@ Watershed_Delineator <- function(raster,
   
   # ------------------------------------------------------------------------------------------------
   # writeout
-  writeRaster(stack,
+  terra::writeRaster(stack,
               file.path(out_dir,paste0(flow_accumulation_rast_name,'.tif')),
               overwrite = TRUE)
   cat('\n')
@@ -2367,7 +2397,7 @@ Watershed_Delineator <- function(raster,
   
   # ------------------------------------------------------------------------------------------------
   # writeout
-  writeRaster(stack,
+  terra::writeRaster(stack,
               file.path(out_dir,paste0(flow_to_outlet_rast_name,'.tif')),
               overwrite = TRUE)
   # ------------------------------------------------------------------------------------------------
