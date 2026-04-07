@@ -1126,7 +1126,7 @@ Watershed_Delineator <- function(raster,
           loading_bar(loading_counter,
                       ncell(raster),
                       width = 50,
-                      optional_text = paste0('Cell: ',loading_counter))
+                      optional_text = '')
         }
         # ------------------------------------------------------------------------------------------------
         
@@ -1322,13 +1322,27 @@ Watershed_Delineator <- function(raster,
           flat_neighbors_outlet <- flat_neighbors_outlet[flat_neighbors_outlet[ ,1] != flat_code &
                                                            flat_neighbors_outlet[ ,2] >= 0, ]
           if(nrow(flat_neighbors_outlet) != 0){
-            y_component <- sin((flat_neighbors_outlet[,1])*(pi/180))
-            x_component <- cos((flat_neighbors_outlet[,1])*(pi/180))
-            rad <- atan(sum(y_component)/sum(x_component))
-            deg <- (rad * 180)/3.14159
-            deg <- round(deg)
-            flow_degree_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- deg
-            flow_rad_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- rad
+            
+            all_flats[[i]] <- unique(all_flats[[i]])
+            deg <- list()
+            rad <- list()
+            for(k in 1:nrow(all_flats[[i]])){
+              row_deltas <- all_flats[[i]][k,1] - flat_neighbors_outlet[,3]
+              column_deltas <- all_flats[[i]][k,2] - flat_neighbors_outlet[,4]
+              rad_s1 <- atan2(sum(row_deltas*diff_y),sum(column_deltas*-1*diff_x))
+              rad[[k]] <- rad_s1
+              deg_s1 <- rad_s1 * (180/pi)
+              deg[[k]] <- (deg_s1 + 360) %% 360
+            }
+            
+            
+            # y_component <- sin((flat_neighbors_outlet[,1])*(pi/180))
+            # x_component <- cos((flat_neighbors_outlet[,1])*(pi/180))
+            # rad <- atan(sum(y_component)/sum(x_component))
+            # deg <- (rad * 180)/3.14159
+            # deg <- round(deg)
+            flow_degree_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- as.vector(unlist(deg))
+            flow_rad_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- as.vector(unlist(rad))
             
           } else {
             flow_degree_values[cbind(all_flats[[i]][,1],all_flats[[i]][,2])] <- sink_code
@@ -1469,7 +1483,6 @@ Watershed_Delineator <- function(raster,
       # ------------------------------------------------------------------------------------------------
     }
     # ------------------------------------------------------------------------------------------------
-    cat('\n')
     return(flow_accumulation)
   }
   # ------------------------------------------------------------------------------------------------  
@@ -2186,14 +2199,15 @@ Watershed_Delineator <- function(raster,
     cat(paste0('\nFor details on the machine these functions were tested on please call wdl_machine_specs()\n\n'))
     cat(paste0('Calculating flow direction raster.\n',
                'Based on historical performance and the size of your raster this will take:\n',
-               minutes,' minutes\n'))
-    cat('Step (1/3)\n\n')
+               minutes,' minutes\n\n'))
+    cat('Step (1/3)\n')
   }
   # ------------------------------------------------------------------------------------------------
   
 
   # ------------------------------------------------------------------------------------------------
   # building raster and writing out
+  cat('Flow Direction and Slope \n')
   output <- flow_dir_of_DEM(raster = raster)
   
   flow_dir_deg_output <- as.numeric(as.vector(unlist(output[[1]])))
@@ -2219,13 +2233,20 @@ Watershed_Delineator <- function(raster,
   
   # ------------------------------------------------------------------------------------------------
   if(resolve_flats == TRUE){
-    output <- resolve_flats_function(input_flow_degree = stack$degrees,
-                                     input_flow_rad = stack$radians,
+    cat(paste0('Resolving Flats\n'))
+    output <- resolve_flats_function(input_flow_degree = flow_dir_deg_rast,
+                                     input_flow_rad = flow_dir_rad_rast,
                                      raster = raster,
                                      flat_code = flat_code,
                                      sink_code = sink_code)
+    flow_dir_deg_output <- list()
+    for(i in 1:nrow(output[[1]])){
+      flow_dir_deg_output[[i]] <- output[[1]][i,]
+    }
+    flow_dir_deg_output <- as.numeric(as.vector(unlist(flow_dir_deg_output)))
     values(flow_dir_deg_rast) <- output[[1]]
     values(flow_dir_rad_rast) <- output[[2]]
+    cat('\n\n')
   }
   # ------------------------------------------------------------------------------------------------
   
@@ -2261,11 +2282,13 @@ Watershed_Delineator <- function(raster,
   
   
   # ------------------------------------------------------------------------------------------------
+  cat('Indegree Raster\n')
   indegree <- neighbors_pointing_to_current_cell(raster = raster,
                                                  diff_x = diff_x,
                                                  diff_y = diff_y,
                                                  flow_dir_deg_output = flow_dir_deg_output,
                                                  outlet_cell = 1:ncell(raster))
+  cat('Flow Accumulation Raster\n')
   flow_accum <- accumulate_flow_across_all_cells(raster = raster,
                                                  diff_x = diff_x,
                                                  diff_y = diff_y,
@@ -2297,6 +2320,7 @@ Watershed_Delineator <- function(raster,
   writeRaster(stack,
               file.path(out_dir,paste0(flow_accumulation_rast_name,'.tif')),
               overwrite = TRUE)
+  cat('\n')
   # ------------------------------------------------------------------------------------------------
   
   
