@@ -86,6 +86,53 @@
 # -----------------------------------------------------------------------------------------------
 
 
+# ------------------------------------------------------------------------------------------------
+# testing values
+# uniform flow to flat
+rast <- raster(ncol = 10, nrow = 11,
+               xmn = 1000, xmx = 2000,
+               ymn = 1000, ymx = 2000,
+               crs = 3310)
+start_value <- 100
+subtract <- 20
+start_row <- rep(start_value, ncol(rast))
+half_rows <- list(start_row)
+for(i in 2:(nrow(rast)/2)){
+  row <- half_rows[[i-1]]
+  inds <- c(i,ncol(rast)-i+1)
+  row[inds[1]:inds[2]] <- row[inds[1]:inds[2]] - subtract
+  half_rows[[i]] <- row
+}
+half_rows2 <- do.call(rbind, half_rows[5:1])
+half_rows <- do.call(rbind, half_rows)
+
+
+all_rows <- rbind(half_rows,
+                  half_rows[5,],
+                  half_rows2)
+all_rows[cbind(c(rep(6,6)),c(5:10))] <- seq(0,-10,length.out = 6)
+all_rows[6,6] <- 0
+values(rast) <- all_rows
+
+
+
+raster <- rast
+out_dir <- 'C:/Users/ChristopherDory/LWA Dropbox/Christopher Dory/Projects/598/598.06/00 ISW/Output/Raster'
+flow_dir_rast_name <- 'Flow_Dir_Test'
+flow_to_outlet_rast_name <- 'Outlet_Test'
+min_slope <- 1
+diff_x <- NULL
+diff_y <- NULL
+zunit <- 'm'
+suppress_loading_bar <- FALSE
+suppress_console_messages <- FALSE
+spinning_bar_update_cycle <- 1
+sink_code <- -4444
+flat_code <- -9999
+outlet_location_CRS <- NULL
+outlet_location_is_sf <- FALSE
+outlet_location <- matrix(c(1850,1500), nrow = 1)
+# -----------------------------------------------------------------------------------------------
 
 
 
@@ -93,10 +140,15 @@
 
 raster <- rast(system.file('ex/elev.tif',package="terra"))
 outlet_location = matrix(c(6.2, 49.87), ncol = 2, byrow = TRUE)
+outlet_location <- st_sf(st_sfc(st_point(outlet_location)),
+                         crs = crs(raster))
+st_geometry(outlet_location) <- 'geometry'
+raster <- crop(raster, st_buffer(outlet_location, 10000))
+
 out_dir <- 'C:/Users/ChristopherDory/LWA Dropbox/Christopher Dory/Projects/598/598.06/00 ISW/Output/Raster'
 flow_dir_rast_name <- 'Flow_Dir_Test'
 flow_to_outlet_rast_name <- 'Outlet_Test'
-min_slope <- 0
+min_slope <- 1
 diff_x <- NULL
 diff_y <- NULL
 zunit <- 'm'
@@ -107,21 +159,25 @@ spinning_bar_update_cycle <- 1
 sink_code <- -4444
 flat_code <- -9999
 outlet_location_CRS <- crs(raster)
-outlet_location_is_sf <- FALSE
+outlet_location_is_sf <- TRUE
 outlet_location_is_line <- FALSE
 outlet_location_line_density <- 100
 Watershed_Delineator(raster,
                      out_dir,
-                     outlet_location_is_sf = FALSE,
+                     outlet_location_is_sf = TRUE,
                      outlet_location = outlet_location, flow_dir_rast_name = 'Flow_Dir_Test')
 r1 <- rast(file.path(out_dir,paste0('flow_accumulation_rast','.tif')))
-deg <- r1$degrees
-v <- values(deg)
-v[v == -4444] <- NA
-values(deg) <- v
-plot(deg)
-r <- rast('C:/Users/ChristopherDory/LWA Dropbox/Christopher Dory/Projects/598/598.06/00 ISW/Data/Raster/DEM/testflow_dir.tif')
-plot(r)
+r2 <- rast(file.path(out_dir,paste0('Flow_Dir_Test','.tif')))
+plot(r1$`Flow Accumulation`)
+plot(r2$degrees)
+plot(raster)
+# deg <- r1$degrees
+# v <- values(deg)
+# v[v == -4444] <- NA
+# values(deg) <- v
+# plot(deg)
+# r <- rast('C:/Users/ChristopherDory/LWA Dropbox/Christopher Dory/Projects/598/598.06/00 ISW/Data/Raster/DEM/testflow_dir.tif')
+# plot(r)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -199,6 +255,7 @@ Watershed_Delineator <- function(raster,
                                  flat_code = -9999,
                                  resolve_flats = TRUE,
                                  sink_code = -4444,
+                                 resolve_sinks_d8 = TRUE,
                                  diff_x = NULL,
                                  diff_y = NULL,
                                  zunit = 'm',
@@ -665,6 +722,110 @@ Watershed_Delineator <- function(raster,
   ################################## MAIN FUNCTIONS ##########################################################
   ############################################################################################################
   
+  # ==================================================================================================
+  # Attempts to resolve sinks by setting sink cells to the minimum of its neighbors
+  # creates flat areas, which if they have no outlet are still sinks, is an incomplete solution
+  # ==================================================================================================
+  resolve_sinks_d8_neighbors <- function(raster){
+    # ------------------------------------------------------------------------------------------------
+    # padding values to avoid out of bounds error
+    padded_values <- values(raster)
+    nrow <- nrow(raster)
+    ncol <- ncol(raster)
+    padded_values <- matrix(padded_values,
+                            nrow = nrow,
+                            ncol = ncol,
+                            byrow = TRUE)
+    padded_values <- rbind(padded_values,
+                           rep(NA,ncol))
+    padded_values <- rbind(rep(NA,ncol),
+                           padded_values)
+    padded_values <- cbind(padded_values,
+                           rep(NA,nrow+2))
+    padded_values <- cbind(rep(NA,nrow+2),
+                           padded_values)
+    # ------------------------------------------------------------------------------------------------
+    
+    # ------------------------------------------------------------------------------------------------
+    # neighbor direction
+    outlet_neighbors_dx <- c( 0,  1, 1, 1, 0, -1, -1, -1)
+    outlet_neighbors_dy <- c(-1, -1, 0, 1, 1,  1,  0, -1)
+    diff_dx <- c(0, 1, 1,  1,  0, -1, -1, -1)
+    diff_dy <- c(1, 1, 0, -1, -1, -1,  0,  1)
+    
+    diff_dx_shifted <- c(1, 1,  1, 0, -1, -1, -1, 0) 
+    diff_dy_shifted <- c(1, 0, -1, -1, -1, 0,  1, 1)
+    # ------------------------------------------------------------------------------------------------
+    
+    ordered_inds <- order(padded_values, decreasing = TRUE)
+    ordered_inds <- arrayInd(ordered_inds, dim(padded_values))
+    
+    for(i in 1:nrow(ordered_inds)){
+      # ------------------------------------------------------------------------------------------------
+      # update loading bar
+      if(suppress_loading_bar == FALSE){
+        loading_bar(i,
+                    nrow(ordered_inds),
+                    width = 50,
+                    optional_text = '')
+      }
+      # ------------------------------------------------------------------------------------------------
+      
+      
+      if(is.na(padded_values[ordered_inds[i,1],ordered_inds[i,2]]) == FALSE){
+        # ------------------------------------------------------------------------------------------------
+        # get current neighbors
+        row <- ordered_inds[i,1]
+        column <- ordered_inds[i,2]
+        current_cell_value <- padded_values[row,column]
+        neighbors <- padded_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+        visual_neighbors <- c(neighbors[c(8,1,2)],
+                              neighbors[7], current_cell_value, neighbors[3],
+                              neighbors[c(6,5,4)])
+        visual_neighbors <- matrix(visual_neighbors, nrow = 3, ncol = 3, byrow = TRUE)
+        # ------------------------------------------------------------------------------------------------
+        
+        # ------------------------------------------------------------------------------------------------
+        # if any neighbor is NA (edge value) ignore
+        if(any(is.na(neighbors)) == FALSE){
+          # ------------------------------------------------------------------------------------------------
+          # if all surrounding cells are higher (current cell is a sink) set current cell to minimum of its neighbors
+          # (maybe create a flat that can be resolved)
+          if(all(current_cell_value < neighbors) == TRUE){
+            padded_values[row,column] <- min(neighbors)
+          } else {}
+          # ------------------------------------------------------------------------------------------------
+        } else {}
+        # ------------------------------------------------------------------------------------------------
+      }
+    }
+    # ------------------------------------------------------------------------------------------------
+    # getting rid of value pads
+    new_values <- padded_values[-c(1), ]
+    new_values <- new_values[ ,-c(1)]
+    new_values <- new_values[ ,-c(ncol(new_values))]
+    new_values <- new_values[-c(nrow(new_values)), ]
+    # ------------------------------------------------------------------------------------------------
+    
+    # ------------------------------------------------------------------------------------------------
+    # return
+    return(new_values)
+    # ------------------------------------------------------------------------------------------------
+  }
+  # ------------------------------------------------------------------------------------------------
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
   
   # ==================================================================================================
   # Generates the likely direction of flow from a DEM (0-360 degrees, 90 being north)
@@ -1086,7 +1247,31 @@ Watershed_Delineator <- function(raster,
     
 
     
+    
+    
+    
+    
     ######################################### FIND FLOW DIR ACROSS ALL NEIGHBORS ####################
+    
+    # ------------------------------------------------------------------------------------------------
+    # padding values
+    values <- values(raster)
+    nrow <- nrow(raster)
+    ncol <- ncol(raster)
+    values <- matrix(values,
+                     nrow = nrow,
+                     ncol = ncol,
+                     byrow = TRUE)
+    values <- rbind(values,
+                    rep(NA,ncol))
+    values <- rbind(rep(NA,ncol),
+                    values)
+    values <- cbind(values,
+                    rep(NA,nrow+2))
+    values <- cbind(rep(NA,nrow+2),
+                    values)
+    # ------------------------------------------------------------------------------------------------
+    
     
     # ------------------------------------------------------------------------------------------------
     # getting flow directions
@@ -1188,8 +1373,7 @@ Watershed_Delineator <- function(raster,
         current_cell_value <- flow_degree_values[row,column]
         current_cell_check <- check_cells[row,column]
         # ------------------------------------------------------------------------------------------------
-        
-        
+
         # ------------------------------------------------------------------------------------------------
         if(suppress_loading_bar == FALSE){
           loading_counter <- loading_counter + 1
@@ -1199,14 +1383,16 @@ Watershed_Delineator <- function(raster,
                       optional_text = '')
         }
         # ------------------------------------------------------------------------------------------------
-        
+
         
         # ------------------------------------------------------------------------------------------------
         # if NA its edge piece (forbidden)
         if(is.na(current_cell_value) != TRUE){
+
           # ------------------------------------------------------------------------------------------------
           # check if flat code (wanted)
           if(current_cell_value == flat_code & current_cell_check == FALSE){
+ 
             # ------------------------------------------------------------------------------------------------
             # find neighbors of current cell, visualize for diagnostic purposes
             outer_counter <- outer_counter + 1
@@ -1219,6 +1405,16 @@ Watershed_Delineator <- function(raster,
                                   current_neighbors[6:4])
             visual_neighbors <- matrix(visual_neighbors,
                                        ncol = 3, nrow = 3, byrow = TRUE)
+            
+            
+            
+            current_neighbors_elev <- raster_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+            current_cell_value_elev <- raster_values[row,column]
+            visual_neighbors_elev <- c(current_neighbors_elev[8], current_neighbors_elev[1:2],
+                                       current_neighbors_elev[7], current_cell_value_elev, current_neighbors_elev[3],
+                                       current_neighbors_elev[6:4])
+            visual_neighbors_elev <- matrix(visual_neighbors_elev,
+                                            ncol = 3, nrow = 3, byrow = TRUE)
             # ------------------------------------------------------------------------------------------------
             
             # ------------------------------------------------------------------------------------------------
@@ -1231,6 +1427,17 @@ Watershed_Delineator <- function(raster,
               # ------------------------------------------------------------------------------------------------
               # are any of the current cell neighbors flat?
               flat_neighbors <- which(current_neighbors == flat_code)
+              if(length(flat_neighbors) == 0){
+                flat_neighbors <- which(current_neighbors_elev == current_cell_value_elev &
+                                          is.na(current_neighbors) == FALSE)
+
+              } else {
+                flat_neighbors <- append(flat_neighbors,
+                                         which(current_neighbors_elev == current_cell_value_elev &
+                                                 is.na(current_neighbors) == FALSE))
+                flat_neighbors <- unique(flat_neighbors)
+              }
+              
               rm <- which(current_check == TRUE)
               if(length(rm) > 0){
                 flat_neighbors <- flat_neighbors[-c(which(flat_neighbors %in% rm))]
@@ -1275,33 +1482,11 @@ Watershed_Delineator <- function(raster,
               # if nothing left to check loop must be complete
               # if there are no nearby flats but there are some set aside then check them
               if(length(flat_neighbors) == 0 & nrow(go_back_and_check) == 0){
+                counter <- counter + 1
                 current_flats[[counter]] <- matrix(c(row,column), nrow = 1)
                 done <- TRUE
                 
               } else if(length(flat_neighbors) == 0 & nrow(go_back_and_check) != 0){
-                # ------------------------------------------------------------------------------------------------
-                # finding next search starting point from what was set aside
-                done2 <- FALSE
-                while(done2 == FALSE){
-                  next_chosen_cell <- round(runif(n = 1,
-                                                  min = 1,
-                                                  max = nrow(go_back_and_check)))
-                  row <- go_back_and_check[next_chosen_cell, 1]
-                  column <- go_back_and_check[next_chosen_cell, 2]
-                  go_back_and_check <- matrix(go_back_and_check[-c(next_chosen_cell), ], ncol = 2)
-                  counter <- counter + 1
-                  check_cells[row,column] <- TRUE
-                  current_flats[[counter]] <- matrix(c(row,column), nrow = 1)
-                  
-                  if(nrow(go_back_and_check) == 0){
-                    done2 <- TRUE
-                    
-                  } else if(any(check_cells[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]  == FALSE)){
-                    done2 <- TRUE
-                  } else{}
-                }
-                # ------------------------------------------------------------------------------------------------
-                
                 # ------------------------------------------------------------------------------------------------
                 # remove first dummy row?
                 if(remove_first_row == TRUE){
@@ -1309,6 +1494,34 @@ Watershed_Delineator <- function(raster,
                   remove_first_row <- FALSE
                 }
                 # ------------------------------------------------------------------------------------------------
+                
+                # ------------------------------------------------------------------------------------------------
+                if(nrow(go_back_and_check) > 0){
+                  # ------------------------------------------------------------------------------------------------
+                  # finding next search starting point from what was set aside
+                  done2 <- FALSE
+                  while(done2 == FALSE){
+                    next_chosen_cell <- round(runif(n = 1,
+                                                    min = 1,
+                                                    max = nrow(go_back_and_check)))
+                    row <- go_back_and_check[next_chosen_cell, 1]
+                    column <- go_back_and_check[next_chosen_cell, 2]
+                    go_back_and_check <- matrix(go_back_and_check[-c(next_chosen_cell), ], ncol = 2)
+                    counter <- counter + 1
+                    check_cells[row,column] <- TRUE
+                    current_flats[[counter]] <- matrix(c(row,column), nrow = 1)
+                    
+                    if(nrow(go_back_and_check) == 0){
+                      done2 <- TRUE
+                      
+                    } else if(any(check_cells[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]  == FALSE)){
+                      done2 <- TRUE
+                    } else{}
+                  }
+                  # ------------------------------------------------------------------------------------------------
+                }
+                # ------------------------------------------------------------------------------------------------
+                
               }
               # ------------------------------------------------------------------------------------------------
               
@@ -1324,6 +1537,14 @@ Watershed_Delineator <- function(raster,
                                     current_neighbors[6:4])
               visual_neighbors <- matrix(visual_neighbors,
                                          ncol = 3, nrow = 3, byrow = TRUE)
+              
+              current_neighbors_elev <- raster_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+              current_cell_value_elev <- raster_values[row,column]
+              visual_neighbors_elev <- c(current_neighbors_elev[8], current_neighbors_elev[1:2],
+                                         current_neighbors_elev[7], current_cell_value_elev, current_neighbors_elev[3],
+                                         current_neighbors_elev[6:4])
+              visual_neighbors_elev <- matrix(visual_neighbors_elev,
+                                              ncol = 3, nrow = 3, byrow = TRUE)
               # ------------------------------------------------------------------------------------------------
               
             }
@@ -1359,7 +1580,7 @@ Watershed_Delineator <- function(raster,
         
         
         # ------------------------------------------------------------------------------------------------
-        for(j in 1:nrow(all_flats[[i]])){
+        for(j in 1:nrow(matrix(all_flats[[i]], ncol = 2))){
           # ------------------------------------------------------------------------------------------------
           # get all neighbors and directions of the current flat region
           counter <- counter + 1
@@ -1389,11 +1610,18 @@ Watershed_Delineator <- function(raster,
         flat_neighbors_outlet <- flat_neighbors_outlet[is.na(flat_neighbors_outlet[ ,1]) == FALSE &
                                                          is.na(flat_neighbors_outlet[ ,2]) == FALSE, ]
         if(nrow(flat_neighbors_outlet) != 0){
-          flat_neighbors_outlet <- flat_neighbors_outlet[flat_neighbors_outlet[ ,1] != flat_code &
-                                                           flat_neighbors_outlet[ ,2] >= 0, ]
+          flat_neighbors_outlet <- matrix(flat_neighbors_outlet[flat_neighbors_outlet[ ,1] != flat_code &
+                                                                flat_neighbors_outlet[ ,1] != sink_code &
+                                                                flat_neighbors_outlet[ ,2] >= 0, ], ncol = 4)
           if(nrow(flat_neighbors_outlet) != 0){
             # ------------------------------------------------------------------------------------------------
-            all_flats[[i]] <- unique(all_flats[[i]])
+            all_flats[[i]] <- matrix(unique(all_flats[[i]]), ncol = 2)
+            rm <- which(flow_degree_values[cbind(all_flats[[i]][,1],
+                                                 all_flats[[i]][,2])] != flat_code)
+            if(length(rm) > 0){
+              all_flats[[i]] <- matrix(all_flats[[i]][-c(rm), ], ncol = 2)
+            } else {}
+            
             deg <- list()
             rad <- list()
             for(k in 1:nrow(all_flats[[i]])){
@@ -2225,24 +2453,7 @@ Watershed_Delineator <- function(raster,
   }
   # ------------------------------------------------------------------------------------------------
   
-  # ------------------------------------------------------------------------------------------------
-  # padding values
-  values <- values(raster)
-  nrow <- nrow(raster)
-  ncol <- ncol(raster)
-  values <- matrix(values,
-                   nrow = nrow,
-                   ncol = ncol,
-                   byrow = TRUE)
-  values <- rbind(values,
-                  rep(NA,ncol))
-  values <- rbind(rep(NA,ncol),
-                  values)
-  values <- cbind(values,
-                  rep(NA,nrow+2))
-  values <- cbind(rep(NA,nrow+2),
-                  values)
-  # ------------------------------------------------------------------------------------------------
+  
   
   
   
@@ -2292,7 +2503,13 @@ Watershed_Delineator <- function(raster,
   }
   # ------------------------------------------------------------------------------------------------
   
-
+  # ------------------------------------------------------------------------------------------------
+  if(resolve_sinks_d8 == TRUE){
+    cat(paste0('Resolving Sinks by D8 Neighbor Values\n'))
+    values(raster) <- resolve_sinks_d8_neighbors(raster)
+  }
+  # ------------------------------------------------------------------------------------------------
+  
   # ------------------------------------------------------------------------------------------------
   # building raster and writing out
   cat('Flow Direction and Slope \n')
@@ -2303,7 +2520,7 @@ Watershed_Delineator <- function(raster,
   flow_dir_slope_output <- as.numeric(as.vector(unlist(output[[3]])))
   flow_dir_rast <- rast(ncol = ncol(raster),
                         nrow = nrow(raster),
-                        crs = crs(raster),
+                        crs = st_crs(raster),
                         xmin = xmin(raster),
                         xmax = xmax(raster),
                         ymin = ymin(raster),
@@ -2315,7 +2532,6 @@ Watershed_Delineator <- function(raster,
   values(flow_dir_deg_rast) <- flow_dir_deg_output
   values(flow_dir_rad_rast) <- flow_dir_rad_output
   values(flow_dir_slope_rast) <- flow_dir_slope_output
-
   # ------------------------------------------------------------------------------------------------
   
   
