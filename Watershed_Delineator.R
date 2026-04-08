@@ -52,6 +52,44 @@
 # -----------------------------------------------------------------------------------------------
 
 
+# ------------------------------------------------------------------------------------------------
+# testing values
+# uniform flow to flat
+# rast <- raster(ncol = 10, nrow = 11,
+#                xmn = 1000, xmx = 2000,
+#                ymn = 1000, ymx = 2000,
+#                crs = 3310)
+# vals <- matrix(ncol = 10, nrow = 11, data = 20)
+# vals[,9] <- 30
+# vals[6,9] <- 10
+# vals[,10] <- 0
+# values(rast) <- vals
+# 
+# 
+# 
+# raster <- rast
+# out_dir <- 'C:/Users/ChristopherDory/LWA Dropbox/Christopher Dory/Projects/598/598.06/00 ISW/Output/Raster'
+# flow_dir_rast_name <- 'Flow_Dir_Test'
+# flow_to_outlet_rast_name <- 'Outlet_Test'
+# min_slope <- 1
+# diff_x <- NULL
+# diff_y <- NULL
+# zunit <- 'm'
+# suppress_loading_bar <- FALSE
+# suppress_console_messages <- FALSE
+# spinning_bar_update_cycle <- 1
+# sink_code <- -4444
+# flat_code <- -9999
+# outlet_location_CRS <- NULL
+# outlet_location_is_sf <- FALSE
+# outlet_location <- matrix(c(1850,1500), nrow = 1)
+# -----------------------------------------------------------------------------------------------
+
+
+
+
+
+
 
 raster <- rast(system.file('ex/elev.tif',package="terra"))
 outlet_location = matrix(c(6.2, 49.87), ncol = 2, byrow = TRUE)
@@ -1354,19 +1392,37 @@ Watershed_Delineator <- function(raster,
           flat_neighbors_outlet <- flat_neighbors_outlet[flat_neighbors_outlet[ ,1] != flat_code &
                                                            flat_neighbors_outlet[ ,2] >= 0, ]
           if(nrow(flat_neighbors_outlet) != 0){
-            
+            # ------------------------------------------------------------------------------------------------
             all_flats[[i]] <- unique(all_flats[[i]])
             deg <- list()
             rad <- list()
             for(k in 1:nrow(all_flats[[i]])){
               row_deltas <- all_flats[[i]][k,1] - flat_neighbors_outlet[,3]
               column_deltas <- all_flats[[i]][k,2] - flat_neighbors_outlet[,4]
-              rad_s1 <- atan2(sum(row_deltas*diff_y),sum(column_deltas*-1*diff_x))
+              
+              # ------------------------------------------------------------------------------------------------
+              # create unit vectors
+              mags <- sqrt((row_deltas*diff_y)**2 + (column_deltas*diff_x*-1)**2)
+              y <- (row_deltas*diff_y)/mags
+              x <- (column_deltas*diff_x*-1)/mags
+              # ------------------------------------------------------------------------------------------------
+              
+              # ------------------------------------------------------------------------------------------------
+              # weight by inverse magnitude (farther outlets to the flat matter less)
+              y <- y/mags**2
+              x <- x/mags**2
+              # ------------------------------------------------------------------------------------------------
+              
+              # ------------------------------------------------------------------------------------------------
+              # output
+              rad_s1 <- atan2(sum(y),
+                              sum(x))
               rad[[k]] <- rad_s1
               deg_s1 <- rad_s1 * (180/pi)
               deg[[k]] <- (deg_s1 + 360) %% 360
+              # ------------------------------------------------------------------------------------------------
             }
-            
+            # ------------------------------------------------------------------------------------------------
             
             # y_component <- sin((flat_neighbors_outlet[,1])*(pi/180))
             # x_component <- cos((flat_neighbors_outlet[,1])*(pi/180))
