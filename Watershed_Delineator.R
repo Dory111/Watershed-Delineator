@@ -395,10 +395,24 @@ Watershed_Delineator <- function(raster,
 # are border cells. This will not work if there are NA cells in middle of raster that do not
 # constitute an intentional outlet
 # 
-# for example of use where is appropriate see
+# for example of use where is appropriate see (top left corner allows all cells to outflow)
 # dem <- matrix(data = c(NA,NA,NA,NA,NA,NA,NA,NA,
 #                        NA,NA,NA,NA,NA,NA,NA,NA,
 #                        NA,NA,1, 5, 5, 5, NA,NA,
+#                        NA,NA,5, 1, 1, 5, NA,NA,
+#                        NA,NA,5, 1, 2, 5, NA,NA,
+#                        NA,NA,5, 5, 5, 5, NA,NA,
+#                        NA,NA,NA,NA,NA,NA,NA,NA,
+#                        NA,NA,NA,NA,NA,NA,NA,NA),
+#                        nrow=8,
+#                        byrow=TRUE)
+# filled <- priority_flood(dem)
+# print(filled)
+#
+# for example of use where is NOT appropriate see (endorheic)
+# dem <- matrix(data = c(NA,NA,NA,NA,NA,NA,NA,NA,
+#                        NA,NA,NA,NA,NA,NA,NA,NA,
+#                        NA,NA,5, 5, 5, 5, NA,NA,
 #                        NA,NA,5, 1, 1, 5, NA,NA,
 #                        NA,NA,5, 1, 2, 5, NA,NA,
 #                        NA,NA,5, 5, 5, 5, NA,NA,
@@ -2948,7 +2962,7 @@ priority_flood <- function(dem) {
                              xmin = xmin(raster),
                              xmax = xmax(raster),
                              ymin = ymin(raster),
-                            y max = ymax(raster))
+                             ymax = ymax(raster))
   flow_rast          <- flow_dir_rast
   check_rast         <- flow_dir_rast
   
