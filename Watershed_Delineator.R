@@ -243,25 +243,25 @@ plot(raster)
 # ==================================================================================================
 Watershed_Delineator <- function(raster,
                                  out_dir,
-                                 outlet_location = NULL,
-                                 outlet_location_CRS = NULL,
-                                 outlet_location_is_sf = TRUE,
-                                 outlet_location_is_line = FALSE,
+                                 outlet_location              = NULL,
+                                 outlet_location_CRS          = NULL,
+                                 outlet_location_is_sf        = TRUE,
+                                 outlet_location_is_line      = FALSE,
                                  outlet_location_line_density = 100,
-                                 flow_to_outlet_rast_name = NULL,
-                                 flow_dir_rast_name = NULL,
-                                 flow_accumulation_rast_name = NULL,
-                                 min_slope = 0,
-                                 flat_code = -9999,
-                                 resolve_flats = TRUE,
-                                 sink_code = -4444,
-                                 resolve_sinks_d8 = TRUE,
-                                 diff_x = NULL,
-                                 diff_y = NULL,
-                                 zunit = 'm',
-                                 suppress_loading_bar = FALSE,
-                                 suppress_console_messages = FALSE,
-                                 spinning_bar_update_cycle = 1)
+                                 flow_to_outlet_rast_name     = NULL,
+                                 flow_dir_rast_name           = NULL,
+                                 flow_accumulation_rast_name  = NULL,
+                                 min_slope                    = 0,
+                                 flat_code                    = -9999,
+                                 resolve_flats                = TRUE,
+                                 sink_code                    = -4444,
+                                 resolve_sinks_d8             = TRUE,
+                                 diff_x                       = NULL,
+                                 diff_y                       = NULL,
+                                 zunit                        = 'm',
+                                 suppress_loading_bar         = FALSE,
+                                 suppress_console_messages    = FALSE,
+                                 spinning_bar_update_cycle    = 1)
 {
   ############################################################################################################
   ################################## HELPER FUNCTIONS ########################################################
@@ -294,7 +294,7 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     # how much to fill the bar
     filled <- round(width * pct)
-    bar <- paste0(rep("=", filled), collapse = "")
+    bar    <- paste0(rep("=", filled), collapse = "")
     # ------------------------------------------------------------------------------------------------
     
     # ------------------------------------------------------------------------------------------------
@@ -375,15 +375,309 @@ Watershed_Delineator <- function(raster,
   {
     if(require(pkg, character.only = TRUE) == FALSE){
       install.packages(pkg, dependencies = TRUE)
-      library(pkg, character.only = TRUE)
+      library(pkg,          character.only = TRUE)
     } else {
-      library(pkg, character.only = TRUE)
+      library(pkg,          character.only = TRUE)
     }
   }
   # ------------------------------------------------------------------------------------------------
   
   
+#===========================================================================================
+# ensures all cells can flow to outlet cell by priority flood algorithm
+# based on Barnes et al. (2014) 10.1016/j.cageo.2013.04.024
+# if basin is endorheic and basin boundary is included in DEM this algorithm should not be used
+# as then all cells would be raised to the encircling ridgeline
+#
+# assumes border cells are outlets
+#
+# if all border cells are NA (as in some masked rasters) assumes that cells adjacent to NA
+# are border cells. This will not work if there are NA cells in middle of raster that do not
+# constitute an intentional outlet
+# 
+# for example of use where is appropriate see
+# dem <- matrix(data = c(NA,NA,NA,NA,NA,NA,NA,NA,
+#                        NA,NA,NA,NA,NA,NA,NA,NA,
+#                        NA,NA,1, 5, 5, 5, NA,NA,
+#                        NA,NA,5, 1, 1, 5, NA,NA,
+#                        NA,NA,5, 1, 2, 5, NA,NA,
+#                        NA,NA,5, 5, 5, 5, NA,NA,
+#                        NA,NA,NA,NA,NA,NA,NA,NA,
+#                        NA,NA,NA,NA,NA,NA,NA,NA),
+#                        nrow=8,
+#                        byrow=TRUE)
+# filled <- priority_flood(dem)
+# print(filled)
+#===========================================================================================
+priority_flood <- function(dem) {
+  ################################## HELPER FUNCTIONS ########################################################
+  # -----------------------------------------------------------------------------------------------
+  # binds current cell to all cells
+  push_queue <- function(r, c, e) {
+    pq <- rbind(pq,
+                data.frame(row=r, col=c, elev=e))
+    pq <- pq[order(pq$elev), ]
+    return(pq)
+  }
+  # -----------------------------------------------------------------------------------------------
+
+  # -----------------------------------------------------------------------------------------------
+  # get lowest current cell
+  pop_queue <- function(pq) {
+    cell <- pq[1, ]
+    pq   <- pq[-1, ]
+    return(list(cell,
+                pq))
+  }
+  # -----------------------------------------------------------------------------------------------
+
+
+
+
+  ################################## RUN FUNCTIONS ###########################################################
+
+  # -----------------------------------------------------------------------------------------------
+  # number of rows and number of columns in the matrix
+  # as well as whether the cell has been visited
+  nr      <- nrow(dem)
+  nc      <- ncol(dem)
+  visited <- matrix(data = FALSE,
+                    nrow = nr,
+                    ncol = nc)
+  boundary <- matrix(data = FALSE,
+                     nrow = nr,
+                     ncol = nc)
+  # -----------------------------------------------------------------------------------------------
+
+  # -----------------------------------------------------------------------------------------------
+  # Priority queue represented as data.frame
+  pq <- data.frame(row = integer(),
+                   col = integer(),
+                   elev = numeric())
+  # -----------------------------------------------------------------------------------------------
   
+  
+
+  # -----------------------------------------------------------------------------------------------
+  # Add boundary cells
+  # if raster is masked and no cells on boundary are non-NA this won't do much
+  for(r in 1:nr) {
+    for(c in c(1, nc)) {
+      if(!visited[r,c]) {
+        pq           <- push_queue(r, c, dem[r,c])
+        visited[r,c] <- TRUE
+      }
+    }
+  }
+
+  for(c in 1:nc) {
+    for(r in c(1, nr)) {
+      if(!visited[r,c]) {
+        pq           <- push_queue(r, c, dem[r,c])
+        visited[r,c] <- TRUE
+      }
+    }
+  }
+  # -----------------------------------------------------------------------------------------------
+
+
+  # -----------------------------------------------------------------------------------------------
+  # Neighbor directions (8-connectivity)
+  dirs <- expand.grid(dr=-1:1, dc=-1:1)
+  dirs <- dirs[!(dirs$dr == 0 & dirs$dc == 0), ]
+  # -----------------------------------------------------------------------------------------------
+
+
+  # -----------------------------------------------------------------------------------------------
+  # Identify boundary cells
+  # For each cell if the current cell is NA just ignore as its masked
+  # cell can be considered boundary cell under two conditions
+  # either it is not NA and its on the boundary
+  # or its not NA but one of its neighbors is NA
+  # this works under the assumption of a continuous DEM where all NA cells are outlets to flow
+  counter <- 0
+  total   <- length(as.vector(unlist(dem)))
+  if(suppress_console_messages == FALSE){cat('Checking Boundary Cells\n')}
+  for(r in 1:nr) {
+    for(c in 1:nc) {
+      # -----------------------------------------------------------------------------------------------
+      is_boundary <- FALSE
+      counter     <- counter + 1
+
+      if(suppress_loading_bar == FALSE){
+        loading_bar(counter,
+                    total,
+                    width         = 50,
+                    optional_text = '')
+      }
+      # -----------------------------------------------------------------------------------------------
+
+
+      # -----------------------------------------------------------------------------------------------
+      # Skip NA terrain
+      if(is.na(dem[r,c])){next}
+      # -----------------------------------------------------------------------------------------------
+
+      # -----------------------------------------------------------------------------------------------
+      # detect whether cells are on border
+      if(r == 1 || r == nr || c == 1 || c == nc) {
+        is_boundary <- TRUE
+      }
+      # -----------------------------------------------------------------------------------------------
+      
+      # -----------------------------------------------------------------------------------------------
+      # if the current cell is not NA
+      # then check all its neighbors
+      for(i in 1:nrow(dirs)) {
+        # -----------------------------------------------------------------------------------------------
+        # check current cell
+        rr <- r + dirs$dr[i]
+        cc <- c + dirs$dc[i]
+        # -----------------------------------------------------------------------------------------------
+
+        # -----------------------------------------------------------------------------------------------
+        # if its a border cell it will have already been captured above so go to next loop
+        if(rr < 1 || rr > nr || cc < 1 || cc > nc){next}
+        # -----------------------------------------------------------------------------------------------
+
+        # -----------------------------------------------------------------------------------------------
+        # if one of neighbors is NA then the current cell is on a boundary and we can break the loop
+        if(is.na(dem[rr,cc])) {
+          is_boundary <- TRUE
+          break
+        }
+        # -----------------------------------------------------------------------------------------------
+      }
+      # -----------------------------------------------------------------------------------------------
+
+      # -----------------------------------------------------------------------------------------------
+      # push all boundary cells to the first iteration of the priority queue
+      if(is_boundary == TRUE) {
+        pq            <- push_queue(r, c, dem[r,c])
+        visited[r,c]  <- TRUE
+        boundary[r,c] <- TRUE
+      }
+      # -----------------------------------------------------------------------------------------------
+    }
+    # -----------------------------------------------------------------------------------------------
+  }
+  # -----------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+  # -----------------------------------------------------------------------------------------------
+  # while there are still cells to traverse
+  starting_visited <- length(as.vector(unlist(visited))[as.vector(unlist(visited)) == TRUE])
+  counter          <- 0
+  nstep            <- 0
+  total            <- length(as.vector(unlist(dem)))
+  done             <- FALSE
+  characters       <- c('|', '/', '-','\\')
+  if(suppress_console_messages == FALSE){cat('Raising Elevations')}
+  while(done == FALSE) {
+    # -----------------------------------------------------------------------------------------------
+    counter <- counter + 1
+    if(suppress_loading_bar == FALSE){
+      if(counter %% spinning_bar_update_cycle == 0){
+
+        nstep <- nstep + 1
+        pos   <- nstep%%length(characters)
+        
+        if(pos == 0){pos <- 1}
+
+        spinning_bar(optional_text = paste0('Unique Cell Checked: ', counter,
+                                            ' | % Total Cells Checked: ', round((counter/total)*100,1)),
+                     character     = characters[pos],
+                     iter          = counter)
+      } else {
+        if(counter == 1){pos <- 1} 
+
+        spinning_bar(optional_text = paste0('Unique Cell Checked: ', counter,
+                                            ' | % Total Cells Checked: ', round((counter/total)*100,1)),
+                     character     = characters[pos],
+                     iter          = counter)
+      }
+    }
+    # -----------------------------------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------------------------------
+    # get attributes of current cell
+    output <- pop_queue(pq)
+    cell   <- output[[1]]
+    pq     <- output[[2]]
+    r      <- cell$row
+    c      <- cell$col
+    elev   <- cell$elev
+    # -----------------------------------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------------------------------
+    # loop over all neighbors
+    for(i in 1:nrow(dirs)) {
+      # -----------------------------------------------------------------------------------------------
+      # where is current neighbor
+      rr <- r + dirs$dr[i]
+      cc <- c + dirs$dc[i]
+      # -----------------------------------------------------------------------------------------------
+      
+      # -----------------------------------------------------------------------------------------------
+      # border cells are already captured
+      if(rr < 1 || rr > nr || cc < 1 || cc > nc){next}
+      # -----------------------------------------------------------------------------------------------
+      
+      # -----------------------------------------------------------------------------------------------
+      # skip visited cells
+      if(visited[rr, cc] == TRUE){next}
+      # ----------------------------------------------------------------------------------------------- 
+
+      # -----------------------------------------------------------------------------------------------
+      # if the value is NA its already been dealt with and we dont want to adjust its elevation
+      if(is.na(dem[rr, cc]) == TRUE){next}
+      # -----------------------------------------------------------------------------------------------
+      
+      # -----------------------------------------------------------------------------------------------
+      # barring all of the above escape conditions then change visited to true
+      # if the cell has less elevation than the current cell it cannot flow to outlet
+      # and it should be raised to something slightly higher than current elevation
+      visited[rr, cc] <- TRUE
+      n_checked       <- n_checked + 1
+      if(dem[rr, cc] < elev) {
+        dem[rr, cc] <- elev + 1e-6
+      }
+      pq <- push_queue(rr, cc, dem[rr, cc])
+    # -----------------------------------------------------------------------------------------------
+    }
+    # -----------------------------------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------------------------------
+    # if all cells have been visited no need to continue checking priority queue
+    if(n_checked >= total || nrow(pq) == 0){done <- TRUE}
+    # -----------------------------------------------------------------------------------------------
+  }
+  # -----------------------------------------------------------------------------------------------
+  cat('\n')
+  return(dem)
+}
+# -----------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   
   
   #===========================================================================================
@@ -399,14 +693,14 @@ Watershed_Delineator <- function(raster,
       if(is.null(outlet_location_CRS) == TRUE){
         for(i in 1:nrow(outlet_location)){
           out_list[[i]] <- st_sf(st_sfc(st_point(x = c(outlet_location[i,1],outlet_location[i,2])),
-                                 crs = st_crs(raster)))
+                                        crs = st_crs(raster)))
         }
       } else {
         for(i in 1:nrow(outlet_location)){
-          out <- st_sf(st_sfc(st_point(x = c(outlet_location[i,1],outlet_location[i,2])),
-                       crs = outlet_location_CRS))
-          out <- st_transform(out,
-                              st_crs(raster))
+          out           <- st_sf(st_sfc(st_point(x = c(outlet_location[i,1],outlet_location[i,2])),
+                                        crs = outlet_location_CRS))
+          out           <- st_transform(x   = out,
+                                        crs = st_crs(raster))
           out_list[[i]] <- out
         }
       }
@@ -442,10 +736,10 @@ Watershed_Delineator <- function(raster,
     
     # ------------------------------------------------------------------------------------------------
     if(length(out_list) > 0){
-      names(out_list) <- NULL
-      out_list <- do.call(rbind, out_list)
+      names(out_list)       <- NULL
+      out_list              <- do.call(rbind, out_list)
       st_geometry(out_list) <- 'geometry'
-      outlet_location <- out_list
+      outlet_location       <- out_list
     }
     # ------------------------------------------------------------------------------------------------
 
@@ -465,13 +759,13 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     # checking whether outlet flows to current cell
     TF_points <- rep(TRUE, length(outlet_neighbors))
-    checked <- rep(TRUE, length(outlet_neighbors))
+    checked   <- rep(TRUE, length(outlet_neighbors))
     # ------------------------------------------------------------------------------------------------
     
     # ------------------------------------------------------------------------------------------------
     # check cell 1
     if(is.na(outlet_neighbors[1]) == TRUE){
-      TF_points[1] <- FALSE
+      TF_points[1]   <- FALSE
     } else {
       if(outlet_neighbors[1] > min(bounds[1, ]) &
          outlet_neighbors[1] < max(bounds[1, ])){
@@ -485,7 +779,7 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     # check cell 2
     if(is.na(outlet_neighbors[2]) == TRUE){
-      TF_points[2] <- FALSE
+      TF_points[2]   <- FALSE
     } else {
       if(outlet_neighbors[2] > min(bounds[2, ]) &
          outlet_neighbors[2] < max(bounds[2, ])){
@@ -499,7 +793,7 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     # check cell 3
     if(is.na(outlet_neighbors[3]) == TRUE){
-      TF_points[3] <- FALSE
+      TF_points[3]   <- FALSE
     } else {
       if(outlet_neighbors[3] > min(bounds[3, ]) &
          outlet_neighbors[3] < max(bounds[3, ])){
@@ -513,7 +807,7 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     # check cell 4
     if(is.na(outlet_neighbors[4]) == TRUE){
-      TF_points[4] <- FALSE
+      TF_points[4]   <- FALSE
     } else {
       if(outlet_neighbors[4] > min(bounds[4, ]) &
          outlet_neighbors[4] < max(bounds[4, ])){
@@ -527,7 +821,7 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     # check cell 5
     if(is.na(outlet_neighbors[5]) == TRUE){
-      TF_points[5] <- FALSE
+      TF_points[5]   <- FALSE
     } else {
       if(outlet_neighbors[5] > min(bounds[5, ]) &
          outlet_neighbors[5] < max(bounds[5, ])){
@@ -610,7 +904,7 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     # checking whether outlet flows to current cell
     TF_points <- rep(FALSE, 8)
-    mult <- 1
+    mult      <- 1
     # ------------------------------------------------------------------------------------------------
     
     # ------------------------------------------------------------------------------------------------
@@ -618,7 +912,7 @@ Watershed_Delineator <- function(raster,
     if(current_cell_value %in% cardinals){
       cardinal_index <- which(cardinals == current_cell_value)
       TF_points[cardinal_index] <- TRUE
-      mult <- 1
+      mult                      <- 1
     }
     # ------------------------------------------------------------------------------------------------
     
@@ -627,10 +921,10 @@ Watershed_Delineator <- function(raster,
       for(i in 1:nrow(bounds)){
         if(current_cell_value > min(bounds[i, ]) &
            current_cell_value < max(bounds[i, ])){
-          inds <- c(i, i+1)
+          inds            <- c(i, i+1)
           inds[inds == 9] <- 1
           TF_points[inds] <- TRUE
-          mult <- rev(abs(current_cell_value - bounds[i, ])/abs(bounds[i,1] - bounds[i,2]))
+          mult            <- rev(abs(current_cell_value - bounds[i, ])/abs(bounds[i,1] - bounds[i,2]))
         }
       }
     }
@@ -683,8 +977,8 @@ Watershed_Delineator <- function(raster,
                                      crs = st_crs(raster))
         }
       }
-      names(intermediate) <- NULL
-      intermediate <- do.call(rbind, intermediate)
+      names(intermediate)       <- NULL
+      intermediate              <- do.call(rbind, intermediate)
       st_geometry(intermediate) <- 'geometry'
       # ------------------------------------------------------------------------------------------------
       
@@ -694,7 +988,7 @@ Watershed_Delineator <- function(raster,
     
     # ------------------------------------------------------------------------------------------------
     names(new_line_points) <- NULL
-    new_line_points <- do.call(rbind, new_line_points)
+    new_line_points        <- do.call(rbind, new_line_points)
     return(new_line_points)
     # ------------------------------------------------------------------------------------------------
   }
@@ -730,8 +1024,8 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     # padding values to avoid out of bounds error
     padded_values <- values(raster)
-    nrow <- nrow(raster)
-    ncol <- ncol(raster)
+    nrow          <- nrow(raster)
+    ncol          <- ncol(raster)
     padded_values <- matrix(padded_values,
                             nrow = nrow,
                             ncol = ncol,
@@ -775,14 +1069,14 @@ Watershed_Delineator <- function(raster,
       if(is.na(padded_values[ordered_inds[i,1],ordered_inds[i,2]]) == FALSE){
         # ------------------------------------------------------------------------------------------------
         # get current neighbors
-        row <- ordered_inds[i,1]
-        column <- ordered_inds[i,2]
+        row                <- ordered_inds[i,1]
+        column             <- ordered_inds[i,2]
         current_cell_value <- padded_values[row,column]
-        neighbors <- padded_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
-        visual_neighbors <- c(neighbors[c(8,1,2)],
-                              neighbors[7], current_cell_value, neighbors[3],
-                              neighbors[c(6,5,4)])
-        visual_neighbors <- matrix(visual_neighbors, nrow = 3, ncol = 3, byrow = TRUE)
+        neighbors          <- padded_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+        visual_neighbors   <- c(neighbors[c(8,1,2)],
+                                neighbors[7], current_cell_value, neighbors[3],
+                                neighbors[c(6,5,4)])
+        visual_neighbors   <- matrix(visual_neighbors, nrow = 3, ncol = 3, byrow = TRUE)
         # ------------------------------------------------------------------------------------------------
         
         # ------------------------------------------------------------------------------------------------
@@ -867,10 +1161,10 @@ Watershed_Delineator <- function(raster,
         # ------------------------------------------------------------------------------------------------
         
         # ------------------------------------------------------------------------------------------------
-        a <- -(ifinal/kfinal)
-        b <- -(jfinal/kfinal)
-        dir_of_travel <- atan2(-b,-a)
-        inner <- ifinal**2 + jfinal**2 + kfinal**2
+        a                    <- -(ifinal/kfinal)
+        b                    <- -(jfinal/kfinal)
+        dir_of_travel        <- atan2(-b,-a)
+        inner                <- ifinal**2 + jfinal**2 + kfinal**2
         inclination_of_plane <- acos(abs(kfinal/ sqrt(inner)))
         # ------------------------------------------------------------------------------------------------
         
@@ -892,20 +1186,20 @@ Watershed_Delineator <- function(raster,
                                 U)
       {
         # ------------------------------------------------------------------------------------------------
-        imat <- matrix(nrow = 2,
-                       ncol = 2,
-                       data = c(V[2:3],
-                                U[2:3]),
+        imat <- matrix(nrow  = 2,
+                       ncol  = 2,
+                       data  = c(V[2:3],
+                                 U[2:3]),
                        byrow = TRUE)
-        jmat <- matrix(nrow = 2,
-                       ncol = 2,
-                       data = c(V[c(1,3)],
-                                U[c(1,3)]),
+        jmat <- matrix(nrow  = 2,
+                       ncol  = 2,
+                       data  = c(V[c(1,3)],
+                                 U[c(1,3)]),
                        byrow = TRUE)
-        kmat <- matrix(nrow = 2,
-                       ncol = 2,
-                       data = c(V[1:2],
-                                U[1:2]),
+        kmat <- matrix(nrow  = 2,
+                       ncol  = 2,
+                       data  = c(V[1:2],
+                                 U[1:2]),
                        byrow = TRUE)
         # ------------------------------------------------------------------------------------------------
         
@@ -917,10 +1211,10 @@ Watershed_Delineator <- function(raster,
         # ------------------------------------------------------------------------------------------------
         
         # ------------------------------------------------------------------------------------------------
-        a <- -(ifinal/kfinal)
-        b <- -(jfinal/kfinal)
-        dir_of_travel <- atan2(-b,-a)
-        inner <- ifinal**2 + jfinal**2 + kfinal**2
+        a                    <- -(ifinal/kfinal)
+        b                    <- -(jfinal/kfinal)
+        dir_of_travel        <- atan2(-b,-a)
+        inner                <- ifinal**2 + jfinal**2 + kfinal**2
         inclination_of_plane <- acos(abs(kfinal/ sqrt(inner)))
         # ------------------------------------------------------------------------------------------------
         
@@ -971,26 +1265,26 @@ Watershed_Delineator <- function(raster,
       
       # ------------------------------------------------------------------------------------------------
       # adjust position accoutning for NA pad
-      row <- row + 1
+      row    <- row + 1
       column <- column + 1
       # ------------------------------------------------------------------------------------------------
       
       # ------------------------------------------------------------------------------------------------
       # matrix of neighbor values
       current_cell_value <- values[row,column]
-      neighbors <- c(values[row-1,column-1], # NW
-                     values[row-1,column], # N
-                     values[row-1,column+1], # NE
-                     values[row,column-1], # W
-                     values[row,column], # C
-                     values[row,column+1], # E
-                     values[row+1,column-1], # SW
-                     values[row+1,column], # S
-                     values[row+1,column+1]) # SE
-      neighbors <- matrix(nrow = 3,
-                          ncol = 3,
-                          byrow = TRUE,
-                          data = neighbors)
+      neighbors          <- c(values[row-1,column-1],  # NW
+                              values[row-1,column],    # N
+                              values[row-1,column+1],  # NE
+                              values[row,  column-1],  # W
+                              values[row,  column],    # C
+                              values[row,  column+1],  # E
+                              values[row+1,column-1],  # SW
+                              values[row+1,column],    # S
+                              values[row+1,column+1])  # SE
+      neighbors           <- matrix(nrow  = 3,
+                                    ncol  = 3,
+                                    byrow = TRUE,
+                                    data  = neighbors)
       # ------------------------------------------------------------------------------------------------
       
       
@@ -1003,12 +1297,12 @@ Watershed_Delineator <- function(raster,
         # get cardinal values
         ctr_x <- 2
         ctr_y <- 2
-        east_value <- neighbors[ctr_x + 0,
-                                ctr_y + 1]
+        east_value  <- neighbors[ctr_x + 0,
+                                 ctr_y + 1]
         south_value <- neighbors[ctr_x + 1,
                                  ctr_y + 0]
-        west_value <- neighbors[ctr_x + 0,
-                                ctr_y + -1]
+        west_value  <- neighbors[ctr_x + 0,
+                                 ctr_y + -1]
         north_value <- neighbors[ctr_x + -1,
                                  ctr_y + 0]
         # ------------------------------------------------------------------------------------------------
@@ -1021,19 +1315,19 @@ Watershed_Delineator <- function(raster,
                        west_value,
                        north_value)) == TRUE)){
           
-          final_dir <- NA
+          final_dir     <- NA
           final_dir_deg <- NA
-          max_slope <- NA
+          max_slope     <- NA
           
         } else {
           
-          dzdx <- (east_value - west_value)/ (2*diff_x)
-          dzdy <- (north_value - south_value)/(2*diff_y)
-          final_dir <- atan2(-dzdy,-dzdx)
+          dzdx          <- (east_value - west_value)/ (2*diff_x)
+          dzdy          <- (north_value - south_value)/(2*diff_y)
+          final_dir     <- atan2(-dzdy,-dzdx)
           final_dir_deg <- final_dir * (180/3.14159)
           final_dir_deg <- (final_dir_deg + 360) %% 360
-          max_slope <- -(dzdx*cos(final_dir) + dzdy*sin(final_dir))
-          max_slope <- atan2(max_slope,1) * (180/3.14195)
+          max_slope     <- -(dzdx*cos(final_dir) + dzdy*sin(final_dir))
+          max_slope     <- atan2(max_slope,1) * (180/3.14195)
           
         }
         # ------------------------------------------------------------------------------------------------
@@ -1133,9 +1427,9 @@ Watershed_Delineator <- function(raster,
         if(any(is.na(output[[4]])) == FALSE){
           # ------------------------------------------------------------------------------------------------
           # convert from signed to unsigned (0-2*pi) angle
-          bounds_comp <- cbind(bounds, output[[4]])
-          bounds_comp <- (bounds_comp + (2*pi)) %% (2*pi)
-          bounds_comp <- bounds_comp * (180/pi)
+          bounds_comp      <- cbind(bounds, output[[4]])
+          bounds_comp      <- (bounds_comp + (2*pi)) %% (2*pi)
+          bounds_comp      <- bounds_comp * (180/pi)
           bounds_comp[1,1] <- 360
           # ------------------------------------------------------------------------------------------------
           
@@ -1146,7 +1440,7 @@ Watershed_Delineator <- function(raster,
           if(length(inds) > 0){
             bounds_comp_min_inds <- apply(matrix(bounds_comp[inds,3] - bounds_comp[inds,1:2],
                                                  ncol = 2),1,which.min)
-            bounds_comp[inds,3] <- bounds_comp[cbind(inds,bounds_comp_min_inds)]
+            bounds_comp[inds,3]  <- bounds_comp[cbind(inds,bounds_comp_min_inds)]
           }
           # ------------------------------------------------------------------------------------------------
           
@@ -1170,18 +1464,18 @@ Watershed_Delineator <- function(raster,
           
           slopes_wedges <- -((a*cos(final_out)) + (b*sin(final_out)))
           slopes_wedges <- atan2(slopes_wedges,1) * (180/3.14159)
-          dir_wedges <- final_out
+          dir_wedges    <- final_out
           # ------------------------------------------------------------------------------------------------
           
         } else {
           slopes_wedges <- NA
-          dir_wedges <- NA
+          dir_wedges    <- NA
         }
         # ------------------------------------------------------------------------------------------------
         
         # ------------------------------------------------------------------------------------------------
         slopes_wedges <- slopes_wedges[is.na(slopes_wedges) == FALSE]
-        dir_wedges <- dir_wedges[is.na(dir_wedges) == FALSE]
+        dir_wedges    <- dir_wedges[is.na(dir_wedges) == FALSE]
         # ------------------------------------------------------------------------------------------------
         
         # ------------------------------------------------------------------------------------------------
@@ -1194,35 +1488,35 @@ Watershed_Delineator <- function(raster,
           # if not zero but all less than min slope its a flat
           # if neither of these criteria is fulfilled
           if(all(slopes_wedges < 0)){
-            final_dir <- sink_code
+            final_dir     <- sink_code
             final_dir_deg <- sink_code
-            max_slope <- 0
+            max_slope     <- 0
           } else if (all(slopes_wedges < min_slope)){
-            final_dir <- flat_code
+            final_dir     <- flat_code
             final_dir_deg <- flat_code
-            max_slope <- 0
+            max_slope     <- 0
           } else {
             
             ind <- which(slopes_wedges == max(slopes_wedges))
             # ------------------------------------------------------------------------------------------------
             if(length(ind) > 1){
-              final_dir <- mean(dir_wedges[ind], na.rm = T)
+              final_dir     <- mean(dir_wedges[ind], na.rm = T)
               final_dir_deg <- final_dir * (180/3.14159)
               final_dir_deg <- (final_dir_deg + 360) %% 360
-              max_slope <- mean(slopes_wedges[ind], na.rm = T)
+              max_slope     <- mean(slopes_wedges[ind], na.rm = T)
             } else {
-              final_dir <- dir_wedges[ind]
+              final_dir     <- dir_wedges[ind]
               final_dir_deg <- final_dir * (180/3.14159)
               final_dir_deg <- (final_dir_deg + 360) %% 360
-              max_slope <- slopes_wedges[ind]
+              max_slope     <- slopes_wedges[ind]
             }
             # ------------------------------------------------------------------------------------------------
             
             # ------------------------------------------------------------------------------------------------
-            final_dir <- round(final_dir, 0)
+            final_dir     <- round(final_dir, 0)
             final_dir_deg <- round(final_dir_deg, 0)
             if(final_dir == 2*pi){
-              final_dir <- 0
+              final_dir     <- 0
             }
             if(final_dir_deg == 360){
               final_dir_deg <- 0
@@ -1231,9 +1525,9 @@ Watershed_Delineator <- function(raster,
           }
           # ------------------------------------------------------------------------------------------------
         } else{
-          final_dir <- NA
+          final_dir     <- NA
           final_dir_deg <- NA
-          max_slope <- NA
+          max_slope     <- NA
         }
         # ------------------------------------------------------------------------------------------------
       }
@@ -1256,8 +1550,8 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     # padding values
     values <- values(raster)
-    nrow <- nrow(raster)
-    ncol <- ncol(raster)
+    nrow   <- nrow(raster)
+    ncol   <- ncol(raster)
     values <- matrix(values,
                      nrow = nrow,
                      ncol = ncol,
@@ -1275,10 +1569,10 @@ Watershed_Delineator <- function(raster,
     
     # ------------------------------------------------------------------------------------------------
     # getting flow directions
-    flow_dir_deg_output <- list()
-    flow_dir_rad_output <- list()
+    flow_dir_deg_output   <- list()
+    flow_dir_rad_output   <- list()
     flow_dir_slope_output <- list()
-    counter <- 0
+    counter               <- 0
     for(i in 1:nrow(raster)){
       # ------------------------------------------------------------------------------------------------
       # update loading bar
@@ -1294,15 +1588,15 @@ Watershed_Delineator <- function(raster,
       for(j in 1:ncol(raster)){
         counter <- counter + 1
         
-        output <- flow_dir_of_neighbors(raster = raster,
-                                        values = values,
-                                        row = i,
-                                        column = j,
-                                        diff_x = diff_x,
-                                        diff_y = diff_y,
-                                        min_slope = min_slope)
-        flow_dir_deg_output[[counter]] <- output[[2]]
-        flow_dir_rad_output[[counter]] <- output[[1]]
+        output  <- flow_dir_of_neighbors(raster = raster,
+                                         values = values,
+                                         row = i,
+                                         column = j,
+                                         diff_x = diff_x,
+                                         diff_y = diff_y,
+                                         min_slope = min_slope)
+        flow_dir_deg_output[[counter]]   <- output[[2]]
+        flow_dir_rad_output[[counter]]   <- output[[1]]
         flow_dir_slope_output[[counter]] <- output[[3]]
       }
       # ------------------------------------------------------------------------------------------------
@@ -1337,15 +1631,15 @@ Watershed_Delineator <- function(raster,
     flow_degree_values <- matrix(values(input_flow_degree),
                                  ncol = ncol(raster),
                                  nrow = nrow(raster), byrow = TRUE)
-    flow_rad_values <- matrix(values(input_flow_rad),
-                              ncol = ncol(raster),
-                              nrow = nrow(raster), byrow = TRUE)
-    raster_values <- matrix(values(raster),
-                            ncol = ncol(raster),
-                            nrow = nrow(raster), byrow = TRUE)
-    check_cells <- matrix(FALSE,
-                          ncol = ncol(raster),
-                          nrow = nrow(raster), byrow = TRUE)
+    flow_rad_values    <- matrix(values(input_flow_rad),
+                                 ncol = ncol(raster),
+                                 nrow = nrow(raster), byrow = TRUE)
+    raster_values      <- matrix(values(raster),
+                                 ncol = ncol(raster),
+                                 nrow = nrow(raster), byrow = TRUE)
+    check_cells        <- matrix(FALSE,
+                                 ncol = ncol(raster),
+                                 nrow = nrow(raster), byrow = TRUE)
     # ------------------------------------------------------------------------------------------------
     
     # ------------------------------------------------------------------------------------------------
@@ -1360,16 +1654,16 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     
     # ------------------------------------------------------------------------------------------------
-    all_flats <- list()
-    outer_counter <- 0
+    all_flats       <- list()
+    outer_counter   <- 0
     loading_counter <- 0
     for(i in 1:nrow(raster)){
       # ------------------------------------------------------------------------------------------------
       for(j in 1:ncol(raster)){
         # ------------------------------------------------------------------------------------------------
         # getting whether the current cell is NA or flat
-        row <- i
-        column <- j
+        row                <- i
+        column             <- j
         current_cell_value <- flow_degree_values[row,column]
         current_cell_check <- check_cells[row,column]
         # ------------------------------------------------------------------------------------------------
@@ -1395,33 +1689,33 @@ Watershed_Delineator <- function(raster,
  
             # ------------------------------------------------------------------------------------------------
             # find neighbors of current cell, visualize for diagnostic purposes
-            outer_counter <- outer_counter + 1
-            bound <- cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)
-            current_neighbors <- flow_degree_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
-            current_check <- check_cells[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+            outer_counter      <- outer_counter + 1
+            bound              <- cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)
+            current_neighbors  <- flow_degree_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+            current_check      <- check_cells[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
             current_cell_value <- flow_degree_values[row,column]
-            visual_neighbors <- c(current_neighbors[8], current_neighbors[1:2],
-                                  current_neighbors[7], current_cell_value, current_neighbors[3],
-                                  current_neighbors[6:4])
-            visual_neighbors <- matrix(visual_neighbors,
-                                       ncol = 3, nrow = 3, byrow = TRUE)
+            visual_neighbors   <- c(current_neighbors[8], current_neighbors[1:2],
+                                    current_neighbors[7], current_cell_value, current_neighbors[3],
+                                    current_neighbors[6:4])
+            visual_neighbors   <- matrix(visual_neighbors,
+                                         ncol = 3, nrow = 3, byrow = TRUE)
             
             
             
-            current_neighbors_elev <- raster_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+            current_neighbors_elev  <- raster_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
             current_cell_value_elev <- raster_values[row,column]
-            visual_neighbors_elev <- c(current_neighbors_elev[8], current_neighbors_elev[1:2],
-                                       current_neighbors_elev[7], current_cell_value_elev, current_neighbors_elev[3],
-                                       current_neighbors_elev[6:4])
-            visual_neighbors_elev <- matrix(visual_neighbors_elev,
-                                            ncol = 3, nrow = 3, byrow = TRUE)
+            visual_neighbors_elev   <- c(current_neighbors_elev[8], current_neighbors_elev[1:2],
+                                         current_neighbors_elev[7], current_cell_value_elev, current_neighbors_elev[3],
+                                         current_neighbors_elev[6:4])
+            visual_neighbors_elev   <- matrix(visual_neighbors_elev,
+                                              ncol = 3, nrow = 3, byrow = TRUE)
             # ------------------------------------------------------------------------------------------------
             
             # ------------------------------------------------------------------------------------------------
-            done <- FALSE
-            current_flats <- list()
-            counter <- 0
-            remove_first_row <- TRUE
+            done              <- FALSE
+            current_flats     <- list()
+            counter           <- 0
+            remove_first_row  <- TRUE
             go_back_and_check <- matrix(c(1,1), nrow = 1)
             while(done == FALSE){
               # ------------------------------------------------------------------------------------------------
@@ -1429,12 +1723,12 @@ Watershed_Delineator <- function(raster,
               flat_neighbors <- which(current_neighbors == flat_code)
               if(length(flat_neighbors) == 0){
                 flat_neighbors <- which(current_neighbors_elev == current_cell_value_elev &
-                                          is.na(current_neighbors) == FALSE)
+                                        is.na(current_neighbors) == FALSE)
 
               } else {
                 flat_neighbors <- append(flat_neighbors,
                                          which(current_neighbors_elev == current_cell_value_elev &
-                                                 is.na(current_neighbors) == FALSE))
+                                               is.na(current_neighbors) == FALSE))
                 flat_neighbors <- unique(flat_neighbors)
               }
               
@@ -1462,9 +1756,9 @@ Watershed_Delineator <- function(raster,
                 
                 go_back_and_check <- rbind(go_back_and_check,
                                            bound[flat_neighbors[-c(next_chosen_cell)],])
-                next_chosen_cell <- bound[flat_neighbors[next_chosen_cell],]
-                row <- next_chosen_cell[1]
-                column <- next_chosen_cell[2]
+                next_chosen_cell  <- bound[flat_neighbors[next_chosen_cell],]
+                row               <- next_chosen_cell[1]
+                column            <- next_chosen_cell[2]
                 
                 # ------------------------------------------------------------------------------------------------
                 
@@ -1472,7 +1766,7 @@ Watershed_Delineator <- function(raster,
                 # remove first dummy row?
                 if(remove_first_row == TRUE){
                   go_back_and_check <- matrix(go_back_and_check[-c(1), ], ncol = 2)
-                  remove_first_row <- FALSE
+                  remove_first_row  <- FALSE
                 }
                 # ------------------------------------------------------------------------------------------------
               }
@@ -1482,16 +1776,16 @@ Watershed_Delineator <- function(raster,
               # if nothing left to check loop must be complete
               # if there are no nearby flats but there are some set aside then check them
               if(length(flat_neighbors) == 0 & nrow(go_back_and_check) == 0){
-                counter <- counter + 1
+                counter                  <- counter + 1
                 current_flats[[counter]] <- matrix(c(row,column), nrow = 1)
-                done <- TRUE
+                done                     <- TRUE
                 
               } else if(length(flat_neighbors) == 0 & nrow(go_back_and_check) != 0){
                 # ------------------------------------------------------------------------------------------------
                 # remove first dummy row?
                 if(remove_first_row == TRUE){
                   go_back_and_check <- matrix(go_back_and_check[-c(1), ], ncol = 2)
-                  remove_first_row <- FALSE
+                  remove_first_row  <- FALSE
                 }
                 # ------------------------------------------------------------------------------------------------
                 
@@ -1501,14 +1795,14 @@ Watershed_Delineator <- function(raster,
                   # finding next search starting point from what was set aside
                   done2 <- FALSE
                   while(done2 == FALSE){
-                    next_chosen_cell <- round(runif(n = 1,
-                                                    min = 1,
-                                                    max = nrow(go_back_and_check)))
-                    row <- go_back_and_check[next_chosen_cell, 1]
-                    column <- go_back_and_check[next_chosen_cell, 2]
-                    go_back_and_check <- matrix(go_back_and_check[-c(next_chosen_cell), ], ncol = 2)
-                    counter <- counter + 1
-                    check_cells[row,column] <- TRUE
+                    next_chosen_cell         <- round(runif(n = 1,
+                                                            min = 1,
+                                                            max = nrow(go_back_and_check)))
+                    row                      <- go_back_and_check[next_chosen_cell, 1]
+                    column                   <- go_back_and_check[next_chosen_cell, 2]
+                    go_back_and_check        <- matrix(go_back_and_check[-c(next_chosen_cell), ], ncol = 2)
+                    counter                  <- counter + 1
+                    check_cells[row,column]  <- TRUE
                     current_flats[[counter]] <- matrix(c(row,column), nrow = 1)
                     
                     if(nrow(go_back_and_check) == 0){
@@ -1528,23 +1822,23 @@ Watershed_Delineator <- function(raster,
               
               # ------------------------------------------------------------------------------------------------
               # find neighbors of current cell, visualize for diagnostic purposes
-              bound <- cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)
-              current_neighbors <- flow_degree_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
-              current_check <- check_cells[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
-              current_cell_value <- flow_degree_values[row,column]
-              visual_neighbors <- c(current_neighbors[8], current_neighbors[1:2],
-                                    current_neighbors[7], current_cell_value, current_neighbors[3],
-                                    current_neighbors[6:4])
-              visual_neighbors <- matrix(visual_neighbors,
-                                         ncol = 3, nrow = 3, byrow = TRUE)
+              bound                   <- cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)
+              current_neighbors       <- flow_degree_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+              current_check           <- check_cells[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+              current_cell_value      <- flow_degree_values[row,column]
+              visual_neighbors        <- c(current_neighbors[8], current_neighbors[1:2],
+                                           current_neighbors[7], current_cell_value, current_neighbors[3],
+                                           current_neighbors[6:4])
+              visual_neighbors        <- matrix(visual_neighbors,
+                                                ncol = 3, nrow = 3, byrow = TRUE)
               
-              current_neighbors_elev <- raster_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
+              current_neighbors_elev  <- raster_values[cbind(row + outlet_neighbors_dy, column + outlet_neighbors_dx)]
               current_cell_value_elev <- raster_values[row,column]
-              visual_neighbors_elev <- c(current_neighbors_elev[8], current_neighbors_elev[1:2],
-                                         current_neighbors_elev[7], current_cell_value_elev, current_neighbors_elev[3],
-                                         current_neighbors_elev[6:4])
-              visual_neighbors_elev <- matrix(visual_neighbors_elev,
-                                              ncol = 3, nrow = 3, byrow = TRUE)
+              visual_neighbors_elev   <- c(current_neighbors_elev[8], current_neighbors_elev[1:2],
+                                           current_neighbors_elev[7], current_cell_value_elev, current_neighbors_elev[3],
+                                           current_neighbors_elev[6:4])
+              visual_neighbors_elev   <- matrix(visual_neighbors_elev,
+                                                ncol = 3, nrow = 3, byrow = TRUE)
               # ------------------------------------------------------------------------------------------------
               
             }
@@ -1575,7 +1869,7 @@ Watershed_Delineator <- function(raster,
         # ------------------------------------------------------------------------------------------------
         # set up list
         flat_neighbors_outlet <- list()
-        counter <- 0
+        counter               <- 0
         # ------------------------------------------------------------------------------------------------
         
         
@@ -1583,15 +1877,15 @@ Watershed_Delineator <- function(raster,
         for(j in 1:nrow(matrix(all_flats[[i]], ncol = 2))){
           # ------------------------------------------------------------------------------------------------
           # get all neighbors and directions of the current flat region
-          counter <- counter + 1
+          counter                          <- counter + 1
           flat_neighbors_outlet[[counter]] <- cbind(all_flats[[i]][j,1] + outlet_neighbors_dy,
                                                     all_flats[[i]][j,2] + outlet_neighbors_dx)
-          current_dem_value <- raster_values[cbind(all_flats[[i]][j,1],
-                                                   all_flats[[i]][j,2])]
-          neighbors_direction <- flow_degree_values[cbind(all_flats[[i]][j,1] + outlet_neighbors_dy,
-                                                          all_flats[[i]][j,2] + outlet_neighbors_dx)]
-          neighbor_dem_delta <- current_dem_value - raster_values[cbind(all_flats[[i]][j,1] + outlet_neighbors_dy,
-                                                                        all_flats[[i]][j,2] + outlet_neighbors_dx)]
+          current_dem_value                <- raster_values[cbind(all_flats[[i]][j,1],
+                                                                  all_flats[[i]][j,2])]
+          neighbors_direction              <- flow_degree_values[cbind(all_flats[[i]][j,1] + outlet_neighbors_dy,
+                                                                       all_flats[[i]][j,2] + outlet_neighbors_dx)]
+          neighbor_dem_delta               <- current_dem_value - raster_values[cbind(all_flats[[i]][j,1] + outlet_neighbors_dy,
+                                                                                      all_flats[[i]][j,2] + outlet_neighbors_dx)]
           flat_neighbors_outlet[[counter]] <- cbind(neighbors_direction,
                                                     neighbor_dem_delta,
                                                     all_flats[[i]][j,1] + outlet_neighbors_dy,
@@ -1616,8 +1910,8 @@ Watershed_Delineator <- function(raster,
           if(nrow(flat_neighbors_outlet) != 0){
             # ------------------------------------------------------------------------------------------------
             all_flats[[i]] <- matrix(unique(all_flats[[i]]), ncol = 2)
-            rm <- which(flow_degree_values[cbind(all_flats[[i]][,1],
-                                                 all_flats[[i]][,2])] != flat_code)
+            rm             <- which(flow_degree_values[cbind(all_flats[[i]][,1],
+                                                       all_flats[[i]][,2])] != flat_code)
             if(length(rm) > 0){
               all_flats[[i]] <- matrix(all_flats[[i]][-c(rm), ], ncol = 2)
             } else {}
@@ -1625,14 +1919,14 @@ Watershed_Delineator <- function(raster,
             deg <- list()
             rad <- list()
             for(k in 1:nrow(all_flats[[i]])){
-              row_deltas <- all_flats[[i]][k,1] - flat_neighbors_outlet[,3]
+              row_deltas    <- all_flats[[i]][k,1] - flat_neighbors_outlet[,3]
               column_deltas <- all_flats[[i]][k,2] - flat_neighbors_outlet[,4]
               
               # ------------------------------------------------------------------------------------------------
               # create unit vectors
               mags <- sqrt((row_deltas*diff_y)**2 + (column_deltas*diff_x*-1)**2)
-              y <- (row_deltas*diff_y)/mags
-              x <- (column_deltas*diff_x*-1)/mags
+              y    <- (row_deltas*diff_y)/mags
+              x    <- (column_deltas*diff_x*-1)/mags
               # ------------------------------------------------------------------------------------------------
               
               # ------------------------------------------------------------------------------------------------
@@ -1643,10 +1937,10 @@ Watershed_Delineator <- function(raster,
               
               # ------------------------------------------------------------------------------------------------
               # output
-              rad_s1 <- atan2(sum(y),
-                              sum(x))
+              rad_s1   <- atan2(sum(y),
+                                sum(x))
               rad[[k]] <- rad_s1
-              deg_s1 <- rad_s1 * (180/pi)
+              deg_s1   <- rad_s1 * (180/pi)
               deg[[k]] <- (deg_s1 + 360) %% 360
               # ------------------------------------------------------------------------------------------------
             }
@@ -1703,10 +1997,10 @@ Watershed_Delineator <- function(raster,
     # directions pointing directly at neighboring cells
     cardinalsx <- c(0, 1, 1,  1,  0, -1, -1, -1)
     cardinalsy <- c(1, 1, 0, -1, -1, -1,  0,  1)
-    cardinals <- atan2(diff_y*cardinalsy,
-                       diff_x*cardinalsx)
-    cardinals <- (cardinals + (2*pi)) %% (2*pi)
-    cardinals <- cardinals * (180/pi)
+    cardinals  <- atan2(diff_y*cardinalsy,
+                        diff_x*cardinalsx)
+    cardinals  <- (cardinals + (2*pi)) %% (2*pi)
+    cardinals  <- cardinals * (180/pi)
     # ------------------------------------------------------------------------------------------------
     
     # ------------------------------------------------------------------------------------------------
@@ -1757,7 +2051,7 @@ Watershed_Delineator <- function(raster,
       outlet_column <- outlet_cell[i] %% ncol(raster)
       if(outlet_column == 0){
         outlet_column <- ncol(raster)
-        outlet_row <- floor(outlet_cell[i]/ncol(raster))
+        outlet_row    <- floor(outlet_cell[i]/ncol(raster))
       } else {
         outlet_row <- floor(outlet_cell[i]/ncol(raster))
         outlet_row <- outlet_row + 1
@@ -1789,7 +2083,7 @@ Watershed_Delineator <- function(raster,
         if(length(inds_to_update) > 0){
           current_accumulation <- flow_accumulation[cbind(outlet_row + outlet_neighbors_dy[inds_to_update],
                                                           outlet_column + outlet_neighbors_dx[inds_to_update])]
-          new_accumulation <- current_accumulation + 1
+          new_accumulation     <- current_accumulation + 1
           flow_accumulation[cbind(outlet_row + outlet_neighbors_dy[inds_to_update],
                                   outlet_column + outlet_neighbors_dx[inds_to_update])] <- new_accumulation * output[[2]]
           
@@ -1827,10 +2121,10 @@ Watershed_Delineator <- function(raster,
     # directions pointing directly at neighboring cells
     cardinalsx <- c(0, 1, 1,  1,  0, -1, -1, -1)
     cardinalsy <- c(1, 1, 0, -1, -1, -1,  0,  1)
-    cardinals <- atan2(diff_y*cardinalsy,
-                       diff_x*cardinalsx)
-    cardinals <- (cardinals + (2*pi)) %% (2*pi)
-    cardinals <- cardinals * (180/pi)
+    cardinals  <- atan2(diff_y*cardinalsy,
+                        diff_x*cardinalsx)
+    cardinals  <- (cardinals + (2*pi)) %% (2*pi)
+    cardinals  <- cardinals * (180/pi)
     # ------------------------------------------------------------------------------------------------
     
     # ------------------------------------------------------------------------------------------------
@@ -1874,19 +2168,19 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     
     # ------------------------------------------------------------------------------------------------
-    vals <- matrix(values(raster), ncol = ncol(raster), nrow = nrow(raster), byrow = T)
-    ord  <- order(vals, decreasing = TRUE)
+    vals            <- matrix(values(raster), ncol = ncol(raster), nrow = nrow(raster), byrow = T)
+    ord             <- order(vals, decreasing = TRUE)
     ordered_indices <- arrayInd(ord, dim(vals))
-    counter <- 0
-    characters <- c('|', '/', '-','\\')
+    counter         <- 0
+    characters      <- c('|', '/', '-','\\')
 
     for(i in 1:nrow(ordered_indices)){
       counter <- counter + 1
       # ------------------------------------------------------------------------------------------------
       # progenitor outlet column, not changed, outlet column and row are updated in while loops while this
       # one only updated in the for loop
-      outlet_row <- ordered_indices[i,1]
-      outlet_column <- ordered_indices[i,2]
+      outlet_row         <- ordered_indices[i,1]
+      outlet_column      <- ordered_indices[i,2]
       current_cell_value <- flow_dir_deg_mat[cbind(outlet_row, outlet_column)]
       # ------------------------------------------------------------------------------------------------
       
@@ -1920,12 +2214,12 @@ Watershed_Delineator <- function(raster,
           # ------------------------------------------------------------------------------------------------
           # update the accumulation by adding one
           current_accumulation_of_start_cell <- flow_accumulation[cbind(outlet_row, outlet_column)]
-          downstream_accumulation <- flow_accumulation[cbind(outlet_row + outlet_neighbors_dy[inds_to_update],
-                                                             outlet_column + outlet_neighbors_dx[inds_to_update])]
+          downstream_accumulation            <- flow_accumulation[cbind(outlet_row + outlet_neighbors_dy[inds_to_update],
+                                                                        outlet_column + outlet_neighbors_dx[inds_to_update])]
           
           flow_accumulation[cbind(outlet_row + outlet_neighbors_dy[inds_to_update],
                                   outlet_column + outlet_neighbors_dx[inds_to_update])] <- downstream_accumulation + 
-            (current_accumulation_of_start_cell * output[[2]])
+                                                                                           (current_accumulation_of_start_cell * output[[2]])
           # ------------------------------------------------------------------------------------------------
           
         } else {}
@@ -1934,7 +2228,6 @@ Watershed_Delineator <- function(raster,
       # ------------------------------------------------------------------------------------------------
     }
     # ------------------------------------------------------------------------------------------------
-
     cat('\n')
     return(flow_accumulation)
   }
@@ -2009,12 +2302,12 @@ Watershed_Delineator <- function(raster,
       outlet_column <- outlet_cell[i] %% ncol(raster)
       if(outlet_column == 0){
         outlet_column <- ncol(raster)
-        outlet_row <- floor(outlet_cell[i]/ncol(raster))
+        outlet_row    <- floor(outlet_cell[i]/ncol(raster))
       } else {
         outlet_row <- floor(outlet_cell[i]/ncol(raster))
         outlet_row <- outlet_row + 1
       }
-      all_check[outlet_row, outlet_column] <- TRUE
+      all_check[outlet_row, outlet_column]               <- TRUE
       cells_flowing_to_outlet[outlet_row, outlet_column] <- TRUE
       
       all_row_columns <- matrix(data = c(outlet_row, outlet_column), nrow = 1, ncol = 2)
@@ -2029,13 +2322,13 @@ Watershed_Delineator <- function(raster,
       
       
       # ------------------------------------------------------------------------------------------------
-      finished <- FALSE
-      counter <- 0
-      ncheck <- 0
-      nstep <- 0
-      niter <- 0
+      finished          <- FALSE
+      counter           <- 0
+      ncheck            <- 0
+      nstep             <- 0
+      niter             <- 0
       go_back_and_check <- matrix(c(1,1), ncol = 2)
-      characters <- c('|', '/', '-','\\')
+      characters        <- c('|', '/', '-','\\')
       while(finished == FALSE){
         niter <- niter + 1
         
@@ -2048,23 +2341,23 @@ Watershed_Delineator <- function(raster,
         
         # ------------------------------------------------------------------------------------------------
         # update matrices
-        row_columns <- cbind(outlet_row + outlet_neighbors_dy,
-                             outlet_column + outlet_neighbors_dx)
+        row_columns   <- cbind(outlet_row + outlet_neighbors_dy,
+                               outlet_column + outlet_neighbors_dx)
         update_needed <- which(cells_flowing_to_outlet[row_columns] == FALSE)
-        ncheck <- ncheck + length(which(all_check[row_columns] == FALSE))
+        ncheck        <- ncheck + length(which(all_check[row_columns] == FALSE))
         if(length(update_needed) != 0){
           cells_flowing_to_outlet[matrix(row_columns[update_needed, ], ncol = 2)] <- output[[1]][update_needed]
-          all_check[matrix(row_columns[update_needed, ], ncol = 2)] <- output[[2]][update_needed]
-        } else {}
+          all_check[matrix(row_columns[update_needed, ], ncol = 2)]               <- output[[2]][update_needed]
+        }
         # ------------------------------------------------------------------------------------------------
         
         # ------------------------------------------------------------------------------------------------
         # find which rows and columns to check next
         next_row_column <- matrix(row_columns[which(output[[1]] == TRUE), ],
                                   ncol = 2)
-        key <- paste0(all_row_columns[, 1], all_row_columns[ ,2])
-        key_next <- paste0(next_row_column[ ,1], next_row_column[ ,2])
-        rm <- which((key_next %in% key) == TRUE)
+        key             <- paste0(all_row_columns[, 1], all_row_columns[ ,2])
+        key_next        <- paste0(next_row_column[ ,1], next_row_column[ ,2])
+        rm              <- which((key_next %in% key) == TRUE)
         if(length(rm) > 0){
           next_row_column <- matrix(next_row_column[-c(rm), ], ncol = 2)
         } else {}
@@ -2075,24 +2368,22 @@ Watershed_Delineator <- function(raster,
         if(suppress_loading_bar == FALSE){
           if(niter %% spinning_bar_update_cycle == 0){
             nstep <- nstep + 1
-            pos <- nstep%%length(characters)
-            if(pos == 0){
-              pos <- 1
-            }
+            pos   <- nstep%%length(characters)
+            if(pos == 0){pos <- 1}
+
             spinning_bar(optional_text = paste0('Outlet Cell: ',i,
                                                 ' | Niter: ', niter,
                                                 ' | Unique Cell Checked: ', ncheck),
-                         character = characters[pos],
-                         iter = i + niter-1)
+                         character     = characters[pos],
+                         iter          = i + niter-1)
           } else {
-            if(niter == 1){
-              pos <- 1
-            } else {}
+            if(niter == 1){pos <- 1}
+
             spinning_bar(optional_text = paste0('Outlet Cell: ',i,
                                                 ' | Niter: ', niter,
                                                 ' | Unique Cell Checked: ', ncheck),
-                         character = characters[pos],
-                         iter = i + niter-1)
+                         character     = characters[pos],
+                         iter          = i + niter-1)
           }
         }
         # ------------------------------------------------------------------------------------------------
@@ -2108,7 +2399,7 @@ Watershed_Delineator <- function(raster,
           # ------------------------------------------------------------------------------------------------
           # get the next row and column
           to_check_currently <- round(runif(n = 1, min = 1, max = nrow(next_row_column)))
-          set_aside <- c(1:nrow(next_row_column))[-c(to_check_currently)]
+          set_aside          <- c(1:nrow(next_row_column))[-c(to_check_currently)]
           # ------------------------------------------------------------------------------------------------
           
           # ------------------------------------------------------------------------------------------------
@@ -2127,7 +2418,7 @@ Watershed_Delineator <- function(raster,
                                          next_row_column[set_aside, ])
             }
             # ------------------------------------------------------------------------------------------------
-          } else{}
+          }
           next_row_column <- matrix(next_row_column[to_check_currently, ], ncol = 2)
           # ------------------------------------------------------------------------------------------------
         } else {
@@ -2149,7 +2440,7 @@ Watershed_Delineator <- function(raster,
             while(row_column_new == FALSE){
               # ------------------------------------------------------------------------------------------------
               to_check_currently <- round(runif(n = 1, min = 1, max = nrow(go_back_and_check)))
-              set_aside <- c(1:nrow(go_back_and_check))[-c(to_check_currently)]
+              set_aside          <- c(1:nrow(go_back_and_check))[-c(to_check_currently)]
               # ------------------------------------------------------------------------------------------------
               
               # ------------------------------------------------------------------------------------------------
@@ -2166,8 +2457,8 @@ Watershed_Delineator <- function(raster,
                 go_back_and_check <- matrix(go_back_and_check[-c(to_check_currently), ],
                                             ncol = 2)
                 if(nrow(go_back_and_check) == 0){
-                  row_column_new <- TRUE
-                  finished <- TRUE
+                  row_column_new  <- TRUE
+                  finished        <- TRUE
                   next_row_column <- c(2,2)
                 }
                 # ------------------------------------------------------------------------------------------------
@@ -2176,16 +2467,16 @@ Watershed_Delineator <- function(raster,
               
               # ------------------------------------------------------------------------------------------------
               if(nrow(step2) == 0){
-                next_row_column <- matrix(go_back_and_check[to_check_currently, ], ncol = 2)
+                next_row_column   <- matrix(go_back_and_check[to_check_currently, ], ncol = 2)
                 go_back_and_check <- matrix(go_back_and_check[set_aside, ],
                                             ncol = 2)
-                row_column_new <- TRUE
+                row_column_new    <- TRUE
               }
               # ------------------------------------------------------------------------------------------------
             }
             # ------------------------------------------------------------------------------------------------
           } else {
-            finished <- TRUE
+            finished        <- TRUE
             next_row_column <- c(2,2)
           }
           # ------------------------------------------------------------------------------------------------
@@ -2194,18 +2485,18 @@ Watershed_Delineator <- function(raster,
         
         # ------------------------------------------------------------------------------------------------
         # increment loop to the next step
-        outlet_row <- next_row_column[1]
-        outlet_column <- next_row_column[2]
+        outlet_row       <- next_row_column[1]
+        outlet_column    <- next_row_column[2]
         outlet_neighbors <- flow_dir_deg_mat[cbind(outlet_row + outlet_neighbors_dy,
                                                    outlet_column + outlet_neighbors_dx)]
-        all_row_columns <- rbind(all_row_columns,
-                                 next_row_column)
+        all_row_columns  <- rbind(all_row_columns,
+                                  next_row_column)
         # ------------------------------------------------------------------------------------------------
       }
       # ------------------------------------------------------------------------------------------------
       
       final_all_check[[i]] <- all_check
-      final_outlet[[i]] <- cells_flowing_to_outlet
+      final_outlet[[i]]    <- cells_flowing_to_outlet
     }
     cat('\n')
     # ------------------------------------------------------------------------------------------------
@@ -2213,17 +2504,17 @@ Watershed_Delineator <- function(raster,
     # ------------------------------------------------------------------------------------------------
     # cbinding to see where any cell is true
     names(final_all_check) <- NULL
-    final_all_check <- lapply(final_all_check, function(x){as.vector(x)})
-    final_all_check <- do.call(cbind, final_all_check)
+    final_all_check        <- lapply(final_all_check, function(x){as.vector(x)})
+    final_all_check        <- do.call(cbind, final_all_check)
     
     names(final_outlet) <- NULL
-    final_outlet <- lapply(final_outlet, function(x){as.vector(x)})
-    final_outlet <- do.call(cbind, final_outlet)
+    final_outlet        <- lapply(final_outlet, function(x){as.vector(x)})
+    final_outlet        <- do.call(cbind, final_outlet)
     # ------------------------------------------------------------------------------------------------
     
     # ------------------------------------------------------------------------------------------------
     # if any cell is true set final output in that position to true
-    all_check <- rep(FALSE, nrow(final_all_check))
+    all_check               <- rep(FALSE, nrow(final_all_check))
     cells_flowing_to_outlet <- rep(FALSE, nrow(final_outlet))
     for(i in 1:nrow(final_all_check)){
       if(any(final_all_check[i, ] == TRUE)){
@@ -2237,9 +2528,9 @@ Watershed_Delineator <- function(raster,
     
     # ------------------------------------------------------------------------------------------------
     # making matrices
-    all_check <- matrix(all_check,
-                        ncol = ncol(raster),
-                        nrow = nrow(raster))
+    all_check               <- matrix(all_check,
+                                      ncol = ncol(raster),
+                                      nrow = nrow(raster))
     cells_flowing_to_outlet <- matrix(cells_flowing_to_outlet,
                                       ncol = ncol(raster),
                                       nrow = nrow(raster))
@@ -2301,7 +2592,7 @@ Watershed_Delineator <- function(raster,
                 'Outlet location passed is NULL\n'))
   } else {
     outlet_location <- coerce_outlet_location(outlet_location)
-    outlet_cell <- terra::cellFromXY(raster, st_coordinates(outlet_location))
+    outlet_cell     <- terra::cellFromXY(raster, st_coordinates(outlet_location))
     
     # ------------------------------------------------------------------------------------------------
     # is outlet location outside raster extent
@@ -2364,8 +2655,8 @@ Watershed_Delineator <- function(raster,
         new_line_points <- custom_st_line_sample(sfobj = out_line,
                                                  n = outlet_location_line_density)
         outlet_location <- new_line_points
-        outlet_cell <- terra::cellFromXY(raster, st_coordinates(new_line_points))
-        outlet_cell <- unique(outlet_cell)
+        outlet_cell     <- terra::cellFromXY(raster, st_coordinates(new_line_points))
+        outlet_cell     <- unique(outlet_cell)
         # ------------------------------------------------------------------------------------------------
         
         
@@ -2402,11 +2693,11 @@ Watershed_Delineator <- function(raster,
   # ------------------------------------------------------------------------------------------------
   # accounting for no entered names
   if(is.null(flow_dir_rast_name) == TRUE){
-    flow_dir_rast_name <- 'flow_dir_rast'
+    flow_dir_rast_name          <- 'flow_dir_rast'
   }
   
   if(is.null(flow_to_outlet_rast_name) == TRUE){
-    flow_to_outlet_rast_name <- 'flow_to_outlet_rast'
+    flow_to_outlet_rast_name    <- 'flow_to_outlet_rast'
   }
   
   if(is.null(flow_accumulation_rast_name) == TRUE){
@@ -2430,8 +2721,8 @@ Watershed_Delineator <- function(raster,
   if(length(grep('Lat',axis)) > 0){ # can latitude be found in the axis def, if so its latlon
     if(is.null(diff_x) == TRUE |
        is.null(diff_y) == TRUE){
-      y <- (ymin(raster) + ymax(raster))/2
-      x <- (xmin(raster) + xmax(raster))/2
+      y      <- (ymin(raster) + ymax(raster))/2
+      x      <- (xmin(raster) + xmax(raster))/2
       diff_x <- Haversine_Formula(y, x,
                                   y, x + res(raster)[1]) * 1000
       diff_y <- Haversine_Formula(y, x,
@@ -2488,7 +2779,7 @@ Watershed_Delineator <- function(raster,
   # ------------------------------------------------------------------------------------------------
   # notify user
   if(suppress_console_messages == FALSE){
-    mils <- ncell(raster)/1e6
+    mils    <- ncell(raster)/1e6
     seconds <- mils*159
     minutes <- round(seconds/60,2)
     
@@ -2513,24 +2804,24 @@ Watershed_Delineator <- function(raster,
   # ------------------------------------------------------------------------------------------------
   # building raster and writing out
   cat('Flow Direction and Slope \n')
-  output <- flow_dir_of_DEM(raster = raster)
+  output                <- flow_dir_of_DEM(raster = raster)
   
-  flow_dir_deg_output <- as.numeric(as.vector(unlist(output[[1]])))
-  flow_dir_rad_output <- as.numeric(as.vector(unlist(output[[2]])))
+  flow_dir_deg_output   <- as.numeric(as.vector(unlist(output[[1]])))
+  flow_dir_rad_output   <- as.numeric(as.vector(unlist(output[[2]])))
   flow_dir_slope_output <- as.numeric(as.vector(unlist(output[[3]])))
-  flow_dir_rast <- rast(ncol = ncol(raster),
-                        nrow = nrow(raster),
-                        crs = st_crs(raster),
-                        xmin = xmin(raster),
-                        xmax = xmax(raster),
-                        ymin = ymin(raster),
-                        ymax = ymax(raster))
-  flow_dir_deg_rast <- flow_dir_rast
-  flow_dir_rad_rast <- flow_dir_rast
-  flow_dir_slope_rast <- flow_dir_rast
+  flow_dir_rast         <- rast(ncol = ncol(raster),
+                                nrow = nrow(raster),
+                                crs = st_crs(raster),
+                                xmin = xmin(raster),
+                                xmax = xmax(raster),
+                                ymin = ymin(raster),
+                                ymax = ymax(raster))
+  flow_dir_deg_rast     <- flow_dir_rast
+  flow_dir_rad_rast     <- flow_dir_rast
+  flow_dir_slope_rast   <- flow_dir_rast
   
-  values(flow_dir_deg_rast) <- flow_dir_deg_output
-  values(flow_dir_rad_rast) <- flow_dir_rad_output
+  values(flow_dir_deg_rast)   <- flow_dir_deg_output
+  values(flow_dir_rad_rast)   <- flow_dir_rad_output
   values(flow_dir_slope_rast) <- flow_dir_slope_output
   # ------------------------------------------------------------------------------------------------
   
@@ -2538,16 +2829,18 @@ Watershed_Delineator <- function(raster,
   # ------------------------------------------------------------------------------------------------
   if(resolve_flats == TRUE){
     cat(paste0('Resolving Flats\n'))
-    output <- resolve_flats_function(input_flow_degree = flow_dir_deg_rast,
-                                     input_flow_rad = flow_dir_rad_rast,
-                                     raster = raster,
-                                     flat_code = flat_code,
-                                     sink_code = sink_code)
+    output              <- resolve_flats_function(input_flow_degree = flow_dir_deg_rast,
+                                                  input_flow_rad = flow_dir_rad_rast,
+                                                  raster = raster,
+                                                  flat_code = flat_code,
+                                                  sink_code = sink_code)
+
     flow_dir_deg_output <- list()
     for(i in 1:nrow(output[[1]])){
       flow_dir_deg_output[[i]] <- output[[1]][i,]
     }
-    flow_dir_deg_output <- as.numeric(as.vector(unlist(flow_dir_deg_output)))
+
+    flow_dir_deg_output       <- as.numeric(as.vector(unlist(flow_dir_deg_output)))
     values(flow_dir_deg_rast) <- output[[1]]
     values(flow_dir_rad_rast) <- output[[2]]
     cat('\n\n')
@@ -2555,13 +2848,13 @@ Watershed_Delineator <- function(raster,
   # ------------------------------------------------------------------------------------------------
   
   # ------------------------------------------------------------------------------------------------
-  stack <- c(flow_dir_deg_rast,
-             flow_dir_rad_rast,
-             flow_dir_slope_rast)
+  stack        <- c(flow_dir_deg_rast,
+                    flow_dir_rad_rast,
+                    flow_dir_slope_rast)
   names(stack) <- c('degrees','radians','slope')
   terra::writeRaster(stack,
-              file.path(out_dir,paste0(flow_dir_rast_name,'.tif')),
-              overwrite = TRUE)
+                     file.path(out_dir,paste0(flow_dir_rast_name,'.tif')),
+                     overwrite = TRUE)
   # ------------------------------------------------------------------------------------------------
 
   
@@ -2599,29 +2892,29 @@ Watershed_Delineator <- function(raster,
   
   
   # ------------------------------------------------------------------------------------------------
-  flow_dir_rast <- rast(ncol = ncol(raster),
-                        nrow = nrow(raster),
-                        crs = crs(raster),
-                        xmin = xmin(raster),
-                        xmax = xmax(raster),
-                        ymin = ymin(raster),
-                        ymax = ymax(raster))
-  flow_rast <- flow_dir_rast
-  indegree_rast <- flow_dir_rast
+  flow_dir_rast         <- rast(ncol = ncol(raster),
+                                nrow = nrow(raster),
+                                crs = crs(raster),
+                                xmin = xmin(raster),
+                                xmax = xmax(raster),
+                                ymin = ymin(raster),
+                                ymax = ymax(raster))
+  flow_rast             <- flow_dir_rast
+  indegree_rast         <- flow_dir_rast
   
-  values(flow_rast) <- flow_accum
+  values(flow_rast)     <- flow_accum
   values(indegree_rast) <- indegree
   
-  stack <- c(flow_rast,
-             indegree_rast)
-  names(stack) <- c('Flow Accumulation','In Degree')
+  stack                 <- c(flow_rast,
+                             indegree_rast)
+  names(stack)          <- c('Flow Accumulation','In Degree')
   # ------------------------------------------------------------------------------------------------
   
   # ------------------------------------------------------------------------------------------------
   # writeout
   terra::writeRaster(stack,
-              file.path(out_dir,paste0(flow_accumulation_rast_name,'.tif')),
-              overwrite = TRUE)
+                     file.path(out_dir,paste0(flow_accumulation_rast_name,'.tif')),
+                     overwrite = TRUE)
   cat('\n')
   # ------------------------------------------------------------------------------------------------
   
@@ -2649,29 +2942,29 @@ Watershed_Delineator <- function(raster,
   
   
   # ------------------------------------------------------------------------------------------------
-  flow_dir_rast <- rast(ncol = ncol(raster),
-                        nrow = nrow(raster),
-                        crs = crs(raster),
-                        xmin = xmin(raster),
-                        xmax = xmax(raster),
-                        ymin = ymin(raster),
-                        ymax = ymax(raster))
-  flow_rast <- flow_dir_rast
-  check_rast <- flow_dir_rast
+  flow_dir_rast      <- rast(ncol = ncol(raster),
+                             nrow = nrow(raster),
+                             crs = crs(raster),
+                             xmin = xmin(raster),
+                             xmax = xmax(raster),
+                             ymin = ymin(raster),
+                            y max = ymax(raster))
+  flow_rast          <- flow_dir_rast
+  check_rast         <- flow_dir_rast
   
-  values(flow_rast) <- output[[2]]
+  values(flow_rast)  <- output[[2]]
   values(check_rast) <- output[[1]]
 
-  stack <- c(flow_rast,
-             check_rast)
-  names(stack) <- c('Flow to Outlet','Checked Cells')
+  stack              <- c(flow_rast,
+                          check_rast)
+  names(stack)       <- c('Flow to Outlet','Checked Cells')
   # ------------------------------------------------------------------------------------------------
   
   # ------------------------------------------------------------------------------------------------
   # writeout
   terra::writeRaster(stack,
-              file.path(out_dir,paste0(flow_to_outlet_rast_name,'.tif')),
-              overwrite = TRUE)
+                     file.path(out_dir,paste0(flow_to_outlet_rast_name,'.tif')),
+                     overwrite = TRUE)
   # ------------------------------------------------------------------------------------------------
 }
 # ------------------------------------------------------------------------------------------------
