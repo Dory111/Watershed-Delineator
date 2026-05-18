@@ -143,7 +143,6 @@ outlet_location = matrix(c(6.2, 49.87), ncol = 2, byrow = TRUE)
 outlet_location <- st_sf(st_sfc(st_point(outlet_location)),
                          crs = crs(raster))
 st_geometry(outlet_location) <- 'geometry'
-raster <- crop(raster, st_buffer(outlet_location, 10000))
 
 out_dir <- 'C:/Users/ChristopherDory/LWA Dropbox/Christopher Dory/Projects/598/598.06/00 ISW/Output/Raster'
 flow_dir_rast_name <- 'Flow_Dir_Test'
@@ -165,12 +164,24 @@ outlet_location_line_density <- 100
 Watershed_Delineator(raster,
                      out_dir,
                      outlet_location_is_sf = TRUE,
-                     outlet_location = outlet_location, flow_dir_rast_name = 'Flow_Dir_Test')
+                     outlet_location = outlet_location,
+                     flow_dir_rast_name = 'Flow_Dir_Test',
+                     fill_dem = 'priority flood',
+                     resolve_sinks_d8 = FALSE,
+                     resolve_flats = TRUE)
 r1 <- rast(file.path(out_dir,paste0('flow_accumulation_rast','.tif')))
 r2 <- rast(file.path(out_dir,paste0('Flow_Dir_Test','.tif')))
-plot(r1$`Flow Accumulation`)
-plot(r2$degrees)
+r3 <- rast(file.path(out_dir,paste0('flow_to_outlet_rast','.tif')))
+windows()
+plot(r1$`Flow Accumulation`, main = 'Flowacc')
+windows()
+plot(r2$degrees, main = 'Flowdeg')
+windows()
 plot(raster)
+plot(st_geometry(outlet_location), add = T)
+windows()
+plot(r3$`Flow to Outlet`)
+plot(st_geometry(outlet_location), add = T)
 # deg <- r1$degrees
 # v <- values(deg)
 # v[v == -4444] <- NA
@@ -254,8 +265,10 @@ Watershed_Delineator <- function(raster,
                                  min_slope                    = 0,
                                  flat_code                    = -9999,
                                  resolve_flats                = TRUE,
+                                 fill_dem                     = NULL,
                                  sink_code                    = -4444,
-                                 resolve_sinks_d8             = TRUE,
+                                 min_sink_slope               = 1e-6,
+                                 resolve_sinks_d8             = FALSE,
                                  diff_x                       = NULL,
                                  diff_y                       = NULL,
                                  zunit                        = 'm',
@@ -383,199 +396,199 @@ Watershed_Delineator <- function(raster,
   # ------------------------------------------------------------------------------------------------
   
   
-#===========================================================================================
-# ensures all cells can flow to outlet cell by priority flood algorithm
-# based on Barnes et al. (2014) 10.1016/j.cageo.2013.04.024
-# if basin is endorheic and basin boundary is included in DEM this algorithm should not be used
-# as then all cells would be raised to the encircling ridgeline
-#
-# assumes border cells are outlets
-#
-# if all border cells are NA (as in some masked rasters) assumes that cells adjacent to NA
-# are border cells. This will not work if there are NA cells in middle of raster that do not
-# constitute an intentional outlet
-# 
-# for example of use where is appropriate see (top left corner allows all cells to outflow)
-# dem <- matrix(data = c(NA,NA,NA,NA,NA,NA,NA,NA,
-#                        NA,NA,NA,NA,NA,NA,NA,NA,
-#                        NA,NA,1, 5, 5, 5, NA,NA,
-#                        NA,NA,5, 1, 1, 5, NA,NA,
-#                        NA,NA,5, 1, 2, 5, NA,NA,
-#                        NA,NA,5, 5, 5, 5, NA,NA,
-#                        NA,NA,NA,NA,NA,NA,NA,NA,
-#                        NA,NA,NA,NA,NA,NA,NA,NA),
-#                        nrow=8,
-#                        byrow=TRUE)
-# filled <- priority_flood(dem)
-# print(filled)
-#
-# for example of use where is NOT appropriate see (endorheic)
-# dem <- matrix(data = c(NA,NA,NA,NA,NA,NA,NA,NA,
-#                        NA,NA,NA,NA,NA,NA,NA,NA,
-#                        NA,NA,5, 5, 5, 5, NA,NA,
-#                        NA,NA,5, 1, 1, 5, NA,NA,
-#                        NA,NA,5, 1, 2, 5, NA,NA,
-#                        NA,NA,5, 5, 5, 5, NA,NA,
-#                        NA,NA,NA,NA,NA,NA,NA,NA,
-#                        NA,NA,NA,NA,NA,NA,NA,NA),
-#                        nrow=8,
-#                        byrow=TRUE)
-# filled <- priority_flood(dem)
-# print(filled)
-#===========================================================================================
-priority_flood <- function(dem) {
-  ################################## HELPER FUNCTIONS ########################################################
-  # -----------------------------------------------------------------------------------------------
-  # binds current cell to all cells
-  push_queue <- function(r, c, e) {
-    pq <- rbind(pq,
-                data.frame(row=r, col=c, elev=e))
-    pq <- pq[order(pq$elev), ]
-    return(pq)
-  }
-  # -----------------------------------------------------------------------------------------------
+  #===========================================================================================
+  # ensures all cells can flow to outlet cell by priority flood algorithm
+  # based on Barnes et al. (2014) 10.1016/j.cageo.2013.04.024
+  # if basin is endorheic and basin boundary is included in DEM this algorithm should not be used
+  # as then all cells would be raised to the encircling ridgeline
+  #
+  # assumes border cells are outlets
+  #
+  # if all border cells are NA (as in some masked rasters) assumes that cells adjacent to NA
+  # are border cells. This will not work if there are NA cells in middle of raster that do not
+  # constitute an intentional outlet
+  # 
+  # for example of use where is appropriate see (top left corner allows all cells to outflow)
+  # dem <- matrix(data = c(NA,NA,NA,NA,NA,NA,NA,NA,
+  #                        NA,NA,NA,NA,NA,NA,NA,NA,
+  #                        NA,NA,1, 5, 5, 5, NA,NA,
+  #                        NA,NA,5, 1, 1, 5, NA,NA,
+  #                        NA,NA,5, 1, 2, 5, NA,NA,
+  #                        NA,NA,5, 5, 5, 5, NA,NA,
+  #                        NA,NA,NA,NA,NA,NA,NA,NA,
+  #                        NA,NA,NA,NA,NA,NA,NA,NA),
+  #                        nrow=8,
+  #                        byrow=TRUE)
+  # filled <- priority_flood(dem)
+  # print(filled)
+  #
+  # for example of use where is NOT appropriate see (endorheic)
+  # dem <- matrix(data = c(NA,NA,NA,NA,NA,NA,NA,NA,
+  #                        NA,NA,NA,NA,NA,NA,NA,NA,
+  #                        NA,NA,5, 5, 5, 5, NA,NA,
+  #                        NA,NA,5, 1, 1, 5, NA,NA,
+  #                        NA,NA,5, 1, 2, 5, NA,NA,
+  #                        NA,NA,5, 5, 5, 5, NA,NA,
+  #                        NA,NA,NA,NA,NA,NA,NA,NA,
+  #                        NA,NA,NA,NA,NA,NA,NA,NA),
+  #                        nrow=8,
+  #                        byrow=TRUE)
+  # filled <- priority_flood(dem)
+  # print(filled)
+  #===========================================================================================
+  priority_flood <- function(dem) {
+    ################################## HELPER FUNCTIONS ########################################################
+    # -----------------------------------------------------------------------------------------------
+    # binds current cell to all cells
+    push_queue <- function(r, c, e) {
+      pq <- rbind(pq,
+                  data.frame(row=r, col=c, elev=e))
+      pq <- pq[order(pq$elev), ]
+      return(pq)
+    }
+    # -----------------------------------------------------------------------------------------------
 
-  # -----------------------------------------------------------------------------------------------
-  # get lowest current cell
-  pop_queue <- function(pq) {
-    cell <- pq[1, ]
-    pq   <- pq[-1, ]
-    return(list(cell,
-                pq))
-  }
-  # -----------------------------------------------------------------------------------------------
-
-
+    # -----------------------------------------------------------------------------------------------
+    # get lowest current cell
+    pop_queue <- function(pq) {
+      cell <- pq[1, ]
+      pq   <- pq[-1, ]
+      return(list(cell,
+                  pq))
+    }
+    # -----------------------------------------------------------------------------------------------
 
 
-  ################################## RUN FUNCTIONS ###########################################################
 
-  # -----------------------------------------------------------------------------------------------
-  # number of rows and number of columns in the matrix
-  # as well as whether the cell has been visited
-  nr      <- nrow(dem)
-  nc      <- ncol(dem)
-  visited <- matrix(data = FALSE,
-                    nrow = nr,
-                    ncol = nc)
-  boundary <- matrix(data = FALSE,
-                     nrow = nr,
-                     ncol = nc)
-  # -----------------------------------------------------------------------------------------------
 
-  # -----------------------------------------------------------------------------------------------
-  # Priority queue represented as data.frame
-  pq <- data.frame(row = integer(),
-                   col = integer(),
-                   elev = numeric())
-  # -----------------------------------------------------------------------------------------------
-  
-  
+    ################################## RUN FUNCTIONS ###########################################################
 
-  # -----------------------------------------------------------------------------------------------
-  # Add boundary cells
-  # if raster is masked and no cells on boundary are non-NA this won't do much
-  for(r in 1:nr) {
-    for(c in c(1, nc)) {
-      if(!visited[r,c]) {
-        pq           <- push_queue(r, c, dem[r,c])
-        visited[r,c] <- TRUE
+    # -----------------------------------------------------------------------------------------------
+    # number of rows and number of columns in the matrix
+    # as well as whether the cell has been visited
+    nr      <- nrow(dem)
+    nc      <- ncol(dem)
+    visited <- matrix(data = FALSE,
+                      nrow = nr,
+                      ncol = nc)
+    boundary <- matrix(data = FALSE,
+                      nrow = nr,
+                      ncol = nc)
+    # -----------------------------------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------------------------------
+    # Priority queue represented as data.frame
+    pq <- data.frame(row = integer(),
+                    col = integer(),
+                    elev = numeric())
+    # -----------------------------------------------------------------------------------------------
+    
+    
+
+    # -----------------------------------------------------------------------------------------------
+    # Add boundary cells
+    # if raster is masked and no cells on boundary are non-NA this won't do much
+    for(r in 1:nr) {
+      for(c in c(1, nc)) {
+        if(!visited[r,c]) {
+          pq           <- push_queue(r, c, dem[r,c])
+          visited[r,c] <- TRUE
+        }
       }
     }
-  }
 
-  for(c in 1:nc) {
-    for(r in c(1, nr)) {
-      if(!visited[r,c]) {
-        pq           <- push_queue(r, c, dem[r,c])
-        visited[r,c] <- TRUE
-      }
-    }
-  }
-  # -----------------------------------------------------------------------------------------------
-
-
-  # -----------------------------------------------------------------------------------------------
-  # Neighbor directions (8-connectivity)
-  dirs <- expand.grid(dr=-1:1, dc=-1:1)
-  dirs <- dirs[!(dirs$dr == 0 & dirs$dc == 0), ]
-  # -----------------------------------------------------------------------------------------------
-
-
-  # -----------------------------------------------------------------------------------------------
-  # Identify boundary cells
-  # For each cell if the current cell is NA just ignore as its masked
-  # cell can be considered boundary cell under two conditions
-  # either it is not NA and its on the boundary
-  # or its not NA but one of its neighbors is NA
-  # this works under the assumption of a continuous DEM where all NA cells are outlets to flow
-  counter <- 0
-  total   <- length(as.vector(unlist(dem)))
-  if(suppress_console_messages == FALSE){cat('Checking Boundary Cells\n')}
-  for(r in 1:nr) {
     for(c in 1:nc) {
-      # -----------------------------------------------------------------------------------------------
-      is_boundary <- FALSE
-      counter     <- counter + 1
-
-      if(suppress_loading_bar == FALSE){
-        loading_bar(counter,
-                    total,
-                    width         = 50,
-                    optional_text = '')
+      for(r in c(1, nr)) {
+        if(!visited[r,c]) {
+          pq           <- push_queue(r, c, dem[r,c])
+          visited[r,c] <- TRUE
+        }
       }
-      # -----------------------------------------------------------------------------------------------
+    }
+    # -----------------------------------------------------------------------------------------------
 
 
-      # -----------------------------------------------------------------------------------------------
-      # Skip NA terrain
-      if(is.na(dem[r,c])){next}
-      # -----------------------------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------------------------
+    # Neighbor directions (8-connectivity)
+    dirs <- expand.grid(dr=-1:1, dc=-1:1)
+    dirs <- dirs[!(dirs$dr == 0 & dirs$dc == 0), ]
+    # -----------------------------------------------------------------------------------------------
 
-      # -----------------------------------------------------------------------------------------------
-      # detect whether cells are on border
-      if(r == 1 || r == nr || c == 1 || c == nc) {
-        is_boundary <- TRUE
-      }
-      # -----------------------------------------------------------------------------------------------
-      
-      # -----------------------------------------------------------------------------------------------
-      # if the current cell is not NA
-      # then check all its neighbors
-      for(i in 1:nrow(dirs)) {
+
+    # -----------------------------------------------------------------------------------------------
+    # Identify boundary cells
+    # For each cell if the current cell is NA just ignore as its masked
+    # cell can be considered boundary cell under two conditions
+    # either it is not NA and its on the boundary
+    # or its not NA but one of its neighbors is NA
+    # this works under the assumption of a continuous DEM where all NA cells are outlets to flow
+    counter <- 0
+    total   <- length(as.vector(unlist(dem)))
+    if(suppress_console_messages == FALSE){cat('Checking Boundary Cells\n')}
+    for(r in 1:nr) {
+      for(c in 1:nc) {
         # -----------------------------------------------------------------------------------------------
-        # check current cell
-        rr <- r + dirs$dr[i]
-        cc <- c + dirs$dc[i]
+        is_boundary <- FALSE
+        counter     <- counter + 1
+
+        if(suppress_loading_bar == FALSE){
+          loading_bar(counter,
+                      total,
+                      width         = 50,
+                      optional_text = '')
+        }
+        # -----------------------------------------------------------------------------------------------
+
+
+        # -----------------------------------------------------------------------------------------------
+        # Skip NA terrain
+        if(is.na(dem[r,c])){next}
         # -----------------------------------------------------------------------------------------------
 
         # -----------------------------------------------------------------------------------------------
-        # if its a border cell it will have already been captured above so go to next loop
-        if(rr < 1 || rr > nr || cc < 1 || cc > nc){next}
-        # -----------------------------------------------------------------------------------------------
-
-        # -----------------------------------------------------------------------------------------------
-        # if one of neighbors is NA then the current cell is on a boundary and we can break the loop
-        if(is.na(dem[rr,cc])) {
+        # detect whether cells are on border
+        if(r == 1 || r == nr || c == 1 || c == nc) {
           is_boundary <- TRUE
-          break
+        }
+        # -----------------------------------------------------------------------------------------------
+        
+        # -----------------------------------------------------------------------------------------------
+        # if the current cell is not NA
+        # then check all its neighbors
+        for(i in 1:nrow(dirs)) {
+          # -----------------------------------------------------------------------------------------------
+          # check current cell
+          rr <- r + dirs$dr[i]
+          cc <- c + dirs$dc[i]
+          # -----------------------------------------------------------------------------------------------
+
+          # -----------------------------------------------------------------------------------------------
+          # if its a border cell it will have already been captured above so go to next loop
+          if(rr < 1 || rr > nr || cc < 1 || cc > nc){next}
+          # -----------------------------------------------------------------------------------------------
+
+          # -----------------------------------------------------------------------------------------------
+          # if one of neighbors is NA then the current cell is on a boundary and we can break the loop
+          if(is.na(dem[rr,cc])) {
+            is_boundary <- TRUE
+            break
+          }
+          # -----------------------------------------------------------------------------------------------
+        }
+        # -----------------------------------------------------------------------------------------------
+
+        # -----------------------------------------------------------------------------------------------
+        # push all boundary cells to the first iteration of the priority queue
+        if(is_boundary == TRUE) {
+          pq            <- push_queue(r, c, dem[r,c])
+          visited[r,c]  <- TRUE
+          boundary[r,c] <- TRUE
         }
         # -----------------------------------------------------------------------------------------------
       }
       # -----------------------------------------------------------------------------------------------
-
-      # -----------------------------------------------------------------------------------------------
-      # push all boundary cells to the first iteration of the priority queue
-      if(is_boundary == TRUE) {
-        pq            <- push_queue(r, c, dem[r,c])
-        visited[r,c]  <- TRUE
-        boundary[r,c] <- TRUE
-      }
-      # -----------------------------------------------------------------------------------------------
     }
     # -----------------------------------------------------------------------------------------------
-  }
-  # -----------------------------------------------------------------------------------------------
 
 
 
@@ -583,111 +596,121 @@ priority_flood <- function(dem) {
 
 
 
-  # -----------------------------------------------------------------------------------------------
-  # while there are still cells to traverse
-  starting_visited <- length(as.vector(unlist(visited))[as.vector(unlist(visited)) == TRUE])
-  counter          <- 0
-  nstep            <- 0
-  total            <- length(as.vector(unlist(dem)))
-  done             <- FALSE
-  characters       <- c('|', '/', '-','\\')
-  if(suppress_console_messages == FALSE){cat('Raising Elevations')}
-  while(done == FALSE) {
     # -----------------------------------------------------------------------------------------------
-    counter <- counter + 1
-    if(suppress_loading_bar == FALSE){
-      if(counter %% spinning_bar_update_cycle == 0){
+    # while there are still cells to traverse
+    starting_visited <- length(as.vector(unlist(visited))[as.vector(unlist(visited)) == TRUE])
+    n_checked        <- starting_visited
+    counter          <- 0
+    nstep            <- 0
+    total            <- length(as.vector(unlist(dem)))
+    done             <- FALSE
+    characters       <- c('|', '/', '-','\\')
+    if(suppress_console_messages == FALSE){cat('Raising Elevations')}
+    while(done == FALSE) {
+      # -----------------------------------------------------------------------------------------------
+      counter <- counter + 1
+      if(suppress_loading_bar == FALSE){
+        if(counter %% spinning_bar_update_cycle == 0){
 
-        nstep <- nstep + 1
-        pos   <- nstep%%length(characters)
+          nstep <- nstep + 1
+          pos   <- nstep%%length(characters)
+          
+          if(pos == 0){pos <- 1}
+
+          spinning_bar(optional_text = paste0('Unique Cell Checked: ', counter,
+                                              ' | % Total Cells Checked: ', round((counter/total)*100,1)),
+                      character     = characters[pos],
+                      iter          = counter)
+        } else {
+          if(counter == 1){pos <- 1} 
+
+          spinning_bar(optional_text = paste0('Unique Cell Checked: ', counter,
+                                              ' | % Total Cells Checked: ', round((counter/total)*100,1)),
+                      character     = characters[pos],
+                      iter          = counter)
+        }
+      }
+      # -----------------------------------------------------------------------------------------------
+
+      # -----------------------------------------------------------------------------------------------
+      # get attributes of current cell
+      output <- pop_queue(pq)
+      cell   <- output[[1]]
+      pq     <- output[[2]]
+      r      <- cell$row
+      c      <- cell$col
+      elev   <- cell$elev
+      # -----------------------------------------------------------------------------------------------
+
+      # -----------------------------------------------------------------------------------------------
+      # loop over all neighbors
+      for(i in 1:nrow(dirs)) {
+        # -----------------------------------------------------------------------------------------------
+        # where is current neighbor
+        rr <- r + dirs$dr[i]
+        cc <- c + dirs$dc[i]
+        # -----------------------------------------------------------------------------------------------
         
-        if(pos == 0){pos <- 1}
+        # -----------------------------------------------------------------------------------------------
+        # border cells are already captured
+        if(rr < 1 || rr > nr || cc < 1 || cc > nc){next}
+        # -----------------------------------------------------------------------------------------------
+        
+        # -----------------------------------------------------------------------------------------------
+        # skip visited cells
+        if(visited[rr, cc] == TRUE){next}
+        # ----------------------------------------------------------------------------------------------- 
 
-        spinning_bar(optional_text = paste0('Unique Cell Checked: ', counter,
-                                            ' | % Total Cells Checked: ', round((counter/total)*100,1)),
-                     character     = characters[pos],
-                     iter          = counter)
-      } else {
-        if(counter == 1){pos <- 1} 
-
-        spinning_bar(optional_text = paste0('Unique Cell Checked: ', counter,
-                                            ' | % Total Cells Checked: ', round((counter/total)*100,1)),
-                     character     = characters[pos],
-                     iter          = counter)
+        # -----------------------------------------------------------------------------------------------
+        # if the value is NA its already been dealt with and we dont want to adjust its elevation
+        if(is.na(dem[rr, cc]) == TRUE){next}
+        # -----------------------------------------------------------------------------------------------
+        
+        # -----------------------------------------------------------------------------------------------
+        # barring all of the above escape conditions then change visited to true
+        # if the cell has less elevation than the current cell it cannot flow to outlet
+        # and it should be raised to something slightly higher than current elevation
+        visited[rr, cc] <- TRUE
+        n_checked       <- n_checked + 1
+        if(dem[rr, cc] < elev) {
+          dem[rr, cc] <- elev + 1e-6
+        }
+        pq <- push_queue(rr, cc, dem[rr, cc])
+      # -----------------------------------------------------------------------------------------------
       }
+      # -----------------------------------------------------------------------------------------------
+
+      # -----------------------------------------------------------------------------------------------
+      # if all cells have been visited no need to continue checking priority queue
+      if(n_checked >= total || nrow(pq) == 0){done <- TRUE}
+      # -----------------------------------------------------------------------------------------------
+    }
+    # -----------------------------------------------------------------------------------------------
+    cat('\n')
+    return(dem)
+  }
+  # -----------------------------------------------------------------------------------------------
+
+
+  #===========================================================================================
+  # Simple function to allocate which fill method to use
+  #===========================================================================================
+  fill_dem_by_user_method <- function(fill_dem){
+    # -----------------------------------------------------------------------------------------------
+    if(str_to_title(fill_dem) == 'Priority Flood'){
+      dem <- priority_flood(matrix(data  = values(raster),
+                                   ncol  = ncol(raster),
+                                   nrow  = nrow(raster),
+                                   byrow = TRUE))
     }
     # -----------------------------------------------------------------------------------------------
 
     # -----------------------------------------------------------------------------------------------
-    # get attributes of current cell
-    output <- pop_queue(pq)
-    cell   <- output[[1]]
-    pq     <- output[[2]]
-    r      <- cell$row
-    c      <- cell$col
-    elev   <- cell$elev
-    # -----------------------------------------------------------------------------------------------
-
-    # -----------------------------------------------------------------------------------------------
-    # loop over all neighbors
-    for(i in 1:nrow(dirs)) {
-      # -----------------------------------------------------------------------------------------------
-      # where is current neighbor
-      rr <- r + dirs$dr[i]
-      cc <- c + dirs$dc[i]
-      # -----------------------------------------------------------------------------------------------
-      
-      # -----------------------------------------------------------------------------------------------
-      # border cells are already captured
-      if(rr < 1 || rr > nr || cc < 1 || cc > nc){next}
-      # -----------------------------------------------------------------------------------------------
-      
-      # -----------------------------------------------------------------------------------------------
-      # skip visited cells
-      if(visited[rr, cc] == TRUE){next}
-      # ----------------------------------------------------------------------------------------------- 
-
-      # -----------------------------------------------------------------------------------------------
-      # if the value is NA its already been dealt with and we dont want to adjust its elevation
-      if(is.na(dem[rr, cc]) == TRUE){next}
-      # -----------------------------------------------------------------------------------------------
-      
-      # -----------------------------------------------------------------------------------------------
-      # barring all of the above escape conditions then change visited to true
-      # if the cell has less elevation than the current cell it cannot flow to outlet
-      # and it should be raised to something slightly higher than current elevation
-      visited[rr, cc] <- TRUE
-      n_checked       <- n_checked + 1
-      if(dem[rr, cc] < elev) {
-        dem[rr, cc] <- elev + 1e-6
-      }
-      pq <- push_queue(rr, cc, dem[rr, cc])
-    # -----------------------------------------------------------------------------------------------
-    }
-    # -----------------------------------------------------------------------------------------------
-
-    # -----------------------------------------------------------------------------------------------
-    # if all cells have been visited no need to continue checking priority queue
-    if(n_checked >= total || nrow(pq) == 0){done <- TRUE}
+    values(raster) <- dem
+    return(raster)
     # -----------------------------------------------------------------------------------------------
   }
   # -----------------------------------------------------------------------------------------------
-  cat('\n')
-  return(dem)
-}
-# -----------------------------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1295,10 +1318,10 @@ priority_flood <- function(dem) {
                               values[row+1,column-1],  # SW
                               values[row+1,column],    # S
                               values[row+1,column+1])  # SE
-      neighbors           <- matrix(nrow  = 3,
-                                    ncol  = 3,
-                                    byrow = TRUE,
-                                    data  = neighbors)
+      neighbors          <- matrix(nrow  = 3,
+                                   ncol  = 3,
+                                   byrow = TRUE,
+                                   data  = neighbors)
       # ------------------------------------------------------------------------------------------------
       
       
@@ -1402,7 +1425,9 @@ priority_flood <- function(dem) {
                p2y - p0y,
                p2z - p0z)
         # ------------------------------------------------------------------------------------------------
-        
+ 
+
+
         # ------------------------------------------------------------------------------------------------
         # get bounds of wedges
         # bounds <- matrix(nrow = 8, ncol = 2,
@@ -1486,7 +1511,8 @@ priority_flood <- function(dem) {
           dir_wedges    <- NA
         }
         # ------------------------------------------------------------------------------------------------
-        
+
+
         # ------------------------------------------------------------------------------------------------
         slopes_wedges <- slopes_wedges[is.na(slopes_wedges) == FALSE]
         dir_wedges    <- dir_wedges[is.na(dir_wedges) == FALSE]
@@ -1504,6 +1530,18 @@ priority_flood <- function(dem) {
           if(all(slopes_wedges < 0)){
             final_dir     <- sink_code
             final_dir_deg <- sink_code
+            # ------------------------------------------------------------------------------------------------
+            # case where all values are the same nominal value can still sometimes produce a very small negative slope
+            # due to small value being added during dem filling to maintain positive flow to outlet cells (default 1e-6)
+            # slope of wedge 5 and 6 in this case will be on the order of 1e-12
+            # matrix(data = c(463,        465, 466,
+            #                 463.000001, 463, 491,
+            #                 484,        494, 493), ncol = 3, nrow = 3, byrow = TRUE)
+            if(any(slopes_wedges < min_sink_slope)){
+              final_dir     <- flat_code
+              final_dir_deg <- flat_code
+            }
+            # ------------------------------------------------------------------------------------------------
             max_slope     <- 0
           } else if (all(slopes_wedges < min_slope)){
             final_dir     <- flat_code
@@ -2721,7 +2759,7 @@ priority_flood <- function(dem) {
   
   # ------------------------------------------------------------------------------------------------
   # ensure correct packages are loaded
-  required_packages <- c('sf','sp','raster','terra')
+  required_packages <- c('sf','sp','raster','terra', 'stringr')
   for(i in 1:length(required_packages)){
     require_package(required_packages[i])
   }
@@ -2730,8 +2768,7 @@ priority_flood <- function(dem) {
   # ------------------------------------------------------------------------------------------------
   # getting km res from arc second raster
   axis <- strsplit(crs(raster),'\n')[[1]]
-  axis <- axis[grep('AXIS',axis)] %>%
-    trimws() %>% strsplit("\"")
+  axis <- strsplit(trimws(axis[grep('AXIS',axis)]), "\"")
   if(length(grep('Lat',axis)) > 0){ # can latitude be found in the axis def, if so its latlon
     if(is.null(diff_x) == TRUE |
        is.null(diff_y) == TRUE){
@@ -2809,6 +2846,9 @@ priority_flood <- function(dem) {
   # ------------------------------------------------------------------------------------------------
   
   # ------------------------------------------------------------------------------------------------
+  if(is.null(fill_dem) == FALSE){
+    raster <- fill_dem_by_user_method(fill_dem)
+  }
   if(resolve_sinks_d8 == TRUE){
     cat(paste0('Resolving Sinks by D8 Neighbor Values\n'))
     values(raster) <- resolve_sinks_d8_neighbors(raster)
@@ -2942,7 +2982,7 @@ priority_flood <- function(dem) {
   if(suppress_console_messages == FALSE){
 
     cat(paste0('Calculating watershed of specified outlet point.\n'))
-    cat('Step (3/3)\n')
+    cat('Step (3/3)')
   }
   # ------------------------------------------------------------------------------------------------
   
