@@ -175,12 +175,12 @@ r3 <- rast(file.path(out_dir,paste0('flow_to_outlet_rast','.tif')))
 windows()
 plot(r1$`Flow Accumulation`, main = 'Flowacc')
 windows()
-plot(r2$degrees, main = 'Flowdeg')
+plot(r2$slope, main = 'Flowdeg')
 windows()
 plot(raster)
 plot(st_geometry(outlet_location), add = T)
 windows()
-plot(r3$`Flow to Outlet`)
+plot(r3$`Checked Cells`)
 plot(st_geometry(outlet_location), add = T)
 # deg <- r1$degrees
 # v <- values(deg)
@@ -2911,7 +2911,7 @@ Watershed_Delineator <- function(raster,
   stack        <- c(flow_dir_deg_rast,
                     flow_dir_rad_rast,
                     flow_dir_slope_rast)
-  names(stack) <- c('degrees','radians','slope')
+  names(stack) <- c('Degrees','Radians','Slope')
   terra::writeRaster(stack,
                      file.path(out_dir,paste0(flow_dir_rast_name,'.tif')),
                      overwrite = TRUE)
