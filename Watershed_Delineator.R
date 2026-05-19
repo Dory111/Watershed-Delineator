@@ -477,12 +477,9 @@ Watershed_Delineator <- function(raster,
     # -----------------------------------------------------------------------------------------------
 
     # -----------------------------------------------------------------------------------------------
-    # Priority queue represented as data.frame
-    pq <- data.frame(row = integer(),
-                    col = integer(),
-                    elev = numeric())
+    # Priority queue from collections package
+    pq <- collections::priority_queue()
     # -----------------------------------------------------------------------------------------------
-    
     
 
     # -----------------------------------------------------------------------------------------------
@@ -491,7 +488,7 @@ Watershed_Delineator <- function(raster,
     for(r in 1:nr) {
       for(c in c(1, nc)) {
         if(!visited[r,c]) {
-          pq           <- push_queue(r, c, dem[r,c])
+          pq$push(c(r, c, dem[r,c]), priority = dem[r,c])
           visited[r,c] <- TRUE
         }
       }
@@ -500,7 +497,7 @@ Watershed_Delineator <- function(raster,
     for(c in 1:nc) {
       for(r in c(1, nr)) {
         if(!visited[r,c]) {
-          pq           <- push_queue(r, c, dem[r,c])
+          pq$push(c(r, c, dem[r,c]), priority = dem[r,c])
           visited[r,c] <- TRUE
         }
       }
@@ -580,7 +577,7 @@ Watershed_Delineator <- function(raster,
         # -----------------------------------------------------------------------------------------------
         # push all boundary cells to the first iteration of the priority queue
         if(is_boundary == TRUE) {
-          pq            <- push_queue(r, c, dem[r,c])
+          pq$push(c(r, c, dem[r,c]), priority = dem[r,c])
           visited[r,c]  <- TRUE
           boundary[r,c] <- TRUE
         }
@@ -634,12 +631,10 @@ Watershed_Delineator <- function(raster,
 
       # -----------------------------------------------------------------------------------------------
       # get attributes of current cell
-      output <- pop_queue(pq)
-      cell   <- output[[1]]
-      pq     <- output[[2]]
-      r      <- cell$row
-      c      <- cell$col
-      elev   <- cell$elev
+      output <- pq$pop()
+      r      <- as.integer(output[1])
+      c      <- as.integer(output[2])
+      elev   <- output[3]
       # -----------------------------------------------------------------------------------------------
 
       # -----------------------------------------------------------------------------------------------
@@ -675,14 +670,14 @@ Watershed_Delineator <- function(raster,
         if(dem[rr, cc] < elev) {
           dem[rr, cc] <- elev + 1e-6
         }
-        pq <- push_queue(rr, cc, dem[rr, cc])
+        pq$push(c(rr, cc, dem[rr, cc]), priority = dem[rr, cc])
       # -----------------------------------------------------------------------------------------------
       }
       # -----------------------------------------------------------------------------------------------
 
       # -----------------------------------------------------------------------------------------------
       # if all cells have been visited no need to continue checking priority queue
-      if(n_checked >= total || nrow(pq) == 0){done <- TRUE}
+      if(n_checked >= total || pq$size() == 0){done <- TRUE}
       # -----------------------------------------------------------------------------------------------
     }
     # -----------------------------------------------------------------------------------------------
@@ -2765,7 +2760,7 @@ Watershed_Delineator <- function(raster,
   
   # ------------------------------------------------------------------------------------------------
   # ensure correct packages are loaded
-  required_packages <- c('sf','sp','raster','terra', 'stringr')
+  required_packages <- c('sf','sp','raster','terra','stringr','collections')
   for(i in 1:length(required_packages)){
     require_package(required_packages[i])
   }
