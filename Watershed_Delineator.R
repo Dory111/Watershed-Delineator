@@ -175,12 +175,12 @@ r3 <- rast(file.path(out_dir,paste0('flow_to_outlet_rast','.tif')))
 windows()
 plot(r1$`Flow Accumulation`, main = 'Flowacc')
 windows()
-plot(r2$slope, main = 'Flowdeg')
+plot(r2$Degrees, main = 'Flowdeg')
 windows()
 plot(raster)
 plot(st_geometry(outlet_location), add = T)
 windows()
-plot(r3$`Checked Cells`)
+plot(r3$`Flow to Outlet`)
 plot(st_geometry(outlet_location), add = T)
 # deg <- r1$degrees
 # v <- values(deg)
@@ -487,8 +487,9 @@ Watershed_Delineator <- function(raster,
     # if raster is masked and no cells on boundary are non-NA this won't do much
     for(r in 1:nr) {
       for(c in c(1, nc)) {
+        if(is.na(dem[r, c])){next}
         if(!visited[r,c]) {
-          pq$push(c(r, c, dem[r,c]), priority = dem[r,c])
+          pq$push(c(r, c, dem[r,c]), priority = 1/dem[r, c])
           visited[r,c] <- TRUE
         }
       }
@@ -496,8 +497,9 @@ Watershed_Delineator <- function(raster,
 
     for(c in 1:nc) {
       for(r in c(1, nr)) {
+        if(is.na(dem[r, c])){next}
         if(!visited[r,c]) {
-          pq$push(c(r, c, dem[r,c]), priority = dem[r,c])
+          pq$push(c(r, c, dem[r,c]), priority = 1/dem[r, c])
           visited[r,c] <- TRUE
         }
       }
@@ -577,7 +579,7 @@ Watershed_Delineator <- function(raster,
         # -----------------------------------------------------------------------------------------------
         # push all boundary cells to the first iteration of the priority queue
         if(is_boundary == TRUE) {
-          pq$push(c(r, c, dem[r,c]), priority = dem[r,c])
+          pq$push(c(r, c, dem[r,c]), priority = 1/dem[r, c])
           visited[r,c]  <- TRUE
           boundary[r,c] <- TRUE
         }
@@ -670,7 +672,7 @@ Watershed_Delineator <- function(raster,
         if(dem[rr, cc] < elev) {
           dem[rr, cc] <- elev + 1e-6
         }
-        pq$push(c(rr, cc, dem[rr, cc]), priority = dem[rr, cc])
+        pq$push(c(rr, cc, dem[rr, cc]), priority = 1/dem[rr, cc])
       # -----------------------------------------------------------------------------------------------
       }
       # -----------------------------------------------------------------------------------------------
