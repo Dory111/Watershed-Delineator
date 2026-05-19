@@ -1552,9 +1552,15 @@ Watershed_Delineator <- function(raster,
             ind <- which(slopes_wedges == max(slopes_wedges))
             # ------------------------------------------------------------------------------------------------
             if(length(ind) > 1){
-              final_dir     <- mean(dir_wedges[ind], na.rm = T)
-              final_dir_deg <- final_dir * (180/3.14159)
-              final_dir_deg <- (final_dir_deg + 360) %% 360
+              final_dirs_deg<- ((dir_wedges[ind] * (180/3.14159)) + 360) %% 360
+              final_dir     <- mean(final_dirs_deg, na.rm = T)
+              final_dir     <- final_dir * (pi/180)
+
+              final_dir     <- ifelse(final_dir > pi,
+                                      final_dir - 2*pi,
+                                      final_dir)
+
+              final_dir_deg <- mean(final_dirs_deg, na.rm = T)
               max_slope     <- mean(slopes_wedges[ind], na.rm = T)
             } else {
               final_dir     <- dir_wedges[ind]
